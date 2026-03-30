@@ -1,0 +1,440 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Procurement Order Builder — Weekly Demo</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=Syne:wght@400;600;700;800&display=swap');
+  :root {
+    --bg:#0d0f14;--surface:#13161e;--surface2:#1a1e2a;--border:#242836;
+    --accent:#e8ff47;--accent2:#47b4ff;--warn:#ff8c47;--danger:#ff4766;
+    --ok:#47ffb4;--text:#e8eaf0;--muted:#6b7280;
+    --mono:'DM Mono',monospace;--sans:'Syne',sans-serif;
+  }
+  *{margin:0;padding:0;box-sizing:border-box;}
+  body{background:var(--bg);color:var(--text);font-family:var(--sans);min-height:100vh;overflow-x:hidden;}
+  body::before{content:'';position:fixed;inset:0;background-image:linear-gradient(rgba(232,255,71,0.03) 1px,transparent 1px),linear-gradient(90deg,rgba(232,255,71,0.03) 1px,transparent 1px);background-size:40px 40px;pointer-events:none;z-index:0;}
+  .container{position:relative;z-index:1;max-width:1600px;margin:0 auto;padding:40px 32px 80px;}
+
+  .header{display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:40px;gap:24px;}
+  .brand-tag{font-family:var(--mono);font-size:11px;color:var(--accent);letter-spacing:0.15em;text-transform:uppercase;margin-bottom:8px;opacity:0.8;}
+  h1{font-size:36px;font-weight:800;letter-spacing:-0.02em;line-height:1.05;}
+  h1 span{color:var(--accent);}
+  .header-sub{font-family:var(--mono);font-size:12px;color:var(--muted);margin-top:8px;letter-spacing:0.05em;}
+  .bq-badge{display:flex;align-items:center;gap:8px;background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:10px 16px;font-family:var(--mono);font-size:11px;color:var(--muted);white-space:nowrap;}
+  .bq-dot{width:6px;height:6px;border-radius:50%;background:var(--ok);box-shadow:0 0 8px var(--ok);animation:pulse 2s infinite;}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:0.4}}
+
+  .kpi-strip{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:24px;}
+  .kpi{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:18px 20px;}
+  .kpi-label{font-family:var(--mono);font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:0.1em;margin-bottom:8px;}
+  .kpi-value{font-family:var(--mono);font-size:22px;font-weight:500;}
+  .kpi-value.accent{color:var(--accent);}
+  .kpi-value.ok{color:var(--ok);}
+  .kpi-value.warn{color:var(--warn);}
+  .kpi-value.danger{color:var(--danger);}
+  .kpi-sub{font-family:var(--mono);font-size:10px;color:var(--muted);margin-top:4px;}
+
+  .budget-bar-wrap{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:20px 24px;margin-bottom:20px;}
+  .budget-bar-header{display:flex;justify-content:space-between;margin-bottom:10px;font-family:var(--mono);font-size:12px;}
+  .budget-track{height:8px;background:var(--surface2);border-radius:4px;overflow:hidden;}
+  .budget-fill{height:100%;border-radius:4px;background:linear-gradient(90deg,var(--ok),var(--accent));width:72%;}
+
+  .table-wrap{background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden;margin-bottom:24px;}
+  .table-toolbar{display:flex;align-items:center;justify-content:space-between;padding:14px 20px;border-bottom:1px solid var(--border);gap:12px;flex-wrap:wrap;}
+  .table-title{font-size:15px;font-weight:700;}
+  .table-sub{font-family:var(--mono);font-size:11px;color:var(--muted);margin-top:2px;}
+  .table-filters{display:flex;gap:8px;}
+  .filter-btn{font-family:var(--mono);font-size:11px;padding:5px 12px;border-radius:20px;border:1px solid var(--border);background:transparent;color:var(--muted);cursor:pointer;transition:all 0.15s;}
+  .filter-btn.active,.filter-btn:hover{border-color:var(--accent);color:var(--accent);background:rgba(232,255,71,0.05);}
+
+  .tbl-scroll{overflow-x:auto;}
+  table{width:100%;border-collapse:collapse;font-family:var(--mono);font-size:12px;}
+
+  /* Column group headers */
+  thead tr.group-row th{
+    padding:6px 14px;font-size:9px;text-transform:uppercase;letter-spacing:0.1em;
+    border-bottom:1px solid var(--border);
+  }
+  thead tr.group-row .grp-product{background:var(--surface2);color:var(--muted);}
+  thead tr.group-row .grp-weeks{background:rgba(71,180,255,0.08);color:var(--accent2);text-align:center;}
+  thead tr.group-row .grp-partial{background:rgba(232,255,71,0.06);color:var(--accent);text-align:center;}
+  thead tr.group-row .grp-metrics{background:rgba(71,255,180,0.06);color:var(--ok);text-align:center;}
+  thead tr.group-row .grp-order{background:rgba(255,140,71,0.08);color:var(--warn);text-align:center;}
+
+  thead tr.col-row th{
+    padding:8px 14px;text-align:left;font-size:9px;color:var(--muted);
+    text-transform:uppercase;letter-spacing:0.08em;
+    border-bottom:2px solid var(--border);background:var(--surface2);white-space:nowrap;
+  }
+  thead tr.col-row th.num{text-align:right;}
+  thead tr.col-row th.week-col{background:rgba(71,180,255,0.05);text-align:right;}
+  thead tr.col-row th.partial-col{background:rgba(232,255,71,0.04);text-align:right;color:var(--accent);opacity:0.7;}
+  thead tr.col-row th.metric-col{background:rgba(71,255,180,0.04);text-align:right;}
+  thead tr.col-row th.order-col{background:rgba(255,140,71,0.05);text-align:right;}
+
+  tbody tr{border-bottom:1px solid rgba(36,40,54,0.6);transition:background 0.15s;}
+  tbody tr:hover{background:rgba(232,255,71,0.02);}
+  tbody tr:last-child{border-bottom:none;}
+  td{padding:10px 14px;vertical-align:middle;}
+  td.num{text-align:right;}
+  td.week-cell{text-align:right;background:rgba(71,180,255,0.02);color:var(--muted);}
+  td.week-cell.active{color:var(--text);}
+  td.partial-cell{text-align:right;background:rgba(232,255,71,0.02);color:var(--accent);opacity:0.6;font-style:italic;}
+  td.metric-cell{text-align:right;background:rgba(71,255,180,0.02);}
+  td.order-cell{text-align:right;background:rgba(255,140,71,0.02);}
+
+  .badge{display:inline-flex;align-items:center;gap:4px;padding:3px 9px;border-radius:20px;font-size:10px;font-weight:600;letter-spacing:0.04em;}
+  .badge.stockout{background:rgba(255,71,102,0.15);color:var(--danger);border:1px solid rgba(255,71,102,0.3);}
+  .badge.low{background:rgba(255,140,71,0.15);color:var(--warn);border:1px solid rgba(255,140,71,0.3);}
+  .badge.healthy{background:rgba(71,255,180,0.12);color:var(--ok);border:1px solid rgba(71,255,180,0.25);}
+  .badge.overstock{background:rgba(71,180,255,0.12);color:var(--accent2);border:1px solid rgba(71,180,255,0.25);}
+
+  .prod-name{font-family:var(--sans);font-size:13px;font-weight:600;color:var(--text);}
+  .prod-sku{font-family:var(--mono);font-size:10px;color:var(--muted);margin-top:2px;}
+  .order-qty{font-size:15px;font-weight:700;color:var(--warn);}
+  .order-qty.zero{color:var(--muted);font-size:13px;}
+
+  .section-label{font-family:var(--mono);font-size:11px;color:var(--accent);text-transform:uppercase;letter-spacing:0.12em;margin-bottom:12px;opacity:0.8;}
+
+  .week-note{font-family:var(--mono);font-size:10px;color:var(--muted);padding:10px 20px;border-top:1px solid var(--border);display:flex;gap:24px;flex-wrap:wrap;}
+  .week-note span{display:flex;align-items:center;gap:6px;}
+  .dot-partial{width:8px;height:8px;border-radius:2px;background:rgba(232,255,71,0.3);border:1px solid var(--accent);}
+  .dot-complete{width:8px;height:8px;border-radius:2px;background:rgba(71,180,255,0.3);border:1px solid var(--accent2);}
+</style>
+</head>
+<body>
+<div class="container">
+
+  <div class="header">
+    <div>
+      <div class="brand-tag">Motherswork · Procurement</div>
+      <h1>Order <span>Builder</span></h1>
+      <div class="header-sub">AVENT · SGD 45,000 budget · 8 week lead time · As of Mon 30 Mar 2026 · Weeks: Mon–Sun</div>
+    </div>
+    <div class="bq-badge">
+      <div class="bq-dot"></div>
+      BigQuery · Live
+    </div>
+  </div>
+
+  <div class="kpi-strip">
+    <div class="kpi">
+      <div class="kpi-label">Total SKUs</div>
+      <div class="kpi-value accent">24</div>
+      <div class="kpi-sub">in this brand</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-label">SKUs to Order</div>
+      <div class="kpi-value warn">11</div>
+      <div class="kpi-sub">within budget</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-label">Stockouts</div>
+      <div class="kpi-value danger">3</div>
+      <div class="kpi-sub">SOH = 0 with sales</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-label">Est. Order Cost</div>
+      <div class="kpi-value ok">S$32,418</div>
+      <div class="kpi-sub">of S$45,000 budget</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-label">Budget Used</div>
+      <div class="kpi-value accent">72%</div>
+      <div class="kpi-sub">S$12,582 remaining</div>
+    </div>
+  </div>
+
+  <div class="budget-bar-wrap">
+    <div class="budget-bar-header">
+      <span style="color:var(--text)">Budget Utilisation</span>
+      <span style="color:var(--ok)">S$32,418 / S$45,000</span>
+    </div>
+    <div class="budget-track"><div class="budget-fill"></div></div>
+  </div>
+
+  <div class="section-label">Suggested Order Plan — Weekly Sales View</div>
+  <div class="table-wrap">
+    <div class="table-toolbar">
+      <div>
+        <div class="table-title">AVENT — SKU Order Recommendations</div>
+        <div class="table-sub">Last 8 complete weeks (Mon–Sun) + current partial week · Avg excl. partial week</div>
+      </div>
+      <div class="table-filters">
+        <button class="filter-btn active">All (24)</button>
+        <button class="filter-btn">Stockout (3)</button>
+        <button class="filter-btn">Low Stock (8)</button>
+        <button class="filter-btn">Healthy (9)</button>
+        <button class="filter-btn">Overstock (4)</button>
+      </div>
+    </div>
+    <div class="tbl-scroll">
+      <table>
+        <thead>
+          <tr class="group-row">
+            <th colspan="4" class="grp-product">Product</th>
+            <th colspan="8" class="grp-weeks">← Last 8 Complete Weeks (Mon–Sun)</th>
+            <th colspan="1" class="grp-partial">This Week*</th>
+            <th colspan="3" class="grp-metrics">Sales Metrics</th>
+            <th colspan="3" class="grp-order">Order</th>
+          </tr>
+          <tr class="col-row">
+            <th>Product</th>
+            <th>Barcode</th>
+            <th>Risk</th>
+            <th class="num">SOH</th>
+            <!-- 8 complete weeks -->
+            <th class="week-col">03–09 Feb</th>
+            <th class="week-col">10–16 Feb</th>
+            <th class="week-col">17–23 Feb</th>
+            <th class="week-col">24 Feb–2 Mar</th>
+            <th class="week-col">3–9 Mar</th>
+            <th class="week-col">10–16 Mar</th>
+            <th class="week-col">17–23 Mar</th>
+            <th class="week-col">24–30 Mar</th>
+            <!-- partial week -->
+            <th class="partial-col">31 Mar–*</th>
+            <!-- metrics -->
+            <th class="metric-col">Avg/Wk</th>
+            <th class="metric-col">WTC</th>
+            <th class="metric-col">Lead Wks</th>
+            <!-- order -->
+            <th class="order-col">Suggest Qty</th>
+            <th class="order-col">Unit Cost</th>
+            <th class="order-col">Line Total</th>
+          </tr>
+        </thead>
+        <tbody>
+          <!-- STOCKOUTS -->
+          <tr>
+            <td><div class="prod-name">Natural Response Teats T1 0M+</div><div class="prod-sku">8720689012003</div></td>
+            <td style="font-family:var(--mono);font-size:11px;color:var(--muted)"></td>
+            <td><span class="badge stockout">● Stockout</span></td>
+            <td class="num">0</td>
+            <td class="week-cell active">9</td>
+            <td class="week-cell active">11</td>
+            <td class="week-cell active">8</td>
+            <td class="week-cell active">12</td>
+            <td class="week-cell active">10</td>
+            <td class="week-cell active">9</td>
+            <td class="week-cell active">11</td>
+            <td class="week-cell active">10</td>
+            <td class="partial-cell">3</td>
+            <td class="metric-cell" style="color:var(--ok)">10.0</td>
+            <td class="metric-cell" style="color:var(--danger)">0.0</td>
+            <td class="metric-cell">8</td>
+            <td class="order-cell"><span class="order-qty">80</span></td>
+            <td class="order-cell">S$6.67</td>
+            <td class="order-cell" style="color:var(--accent)">S$534</td>
+          </tr>
+          <tr>
+            <td><div class="prod-name">Natural Response Teats T2 1M+</div><div class="prod-sku">8720689012010</div></td>
+            <td style="font-family:var(--mono);font-size:11px;color:var(--muted)"></td>
+            <td><span class="badge stockout">● Stockout</span></td>
+            <td class="num">0</td>
+            <td class="week-cell active">8</td>
+            <td class="week-cell active">10</td>
+            <td class="week-cell active">9</td>
+            <td class="week-cell active">11</td>
+            <td class="week-cell active">9</td>
+            <td class="week-cell active">8</td>
+            <td class="week-cell active">10</td>
+            <td class="week-cell active">9</td>
+            <td class="partial-cell">2</td>
+            <td class="metric-cell" style="color:var(--ok)">9.3</td>
+            <td class="metric-cell" style="color:var(--danger)">0.0</td>
+            <td class="metric-cell">8</td>
+            <td class="order-cell"><span class="order-qty">74</span></td>
+            <td class="order-cell">S$6.67</td>
+            <td class="order-cell" style="color:var(--accent)">S$493</td>
+          </tr>
+          <tr>
+            <td><div class="prod-name">Classic+ Bottle 260ml</div><div class="prod-sku">8720689020047</div></td>
+            <td style="font-family:var(--mono);font-size:11px;color:var(--muted)"></td>
+            <td><span class="badge stockout">● Stockout</span></td>
+            <td class="num">0</td>
+            <td class="week-cell active">6</td>
+            <td class="week-cell active">7</td>
+            <td class="week-cell active">5</td>
+            <td class="week-cell active">8</td>
+            <td class="week-cell active">7</td>
+            <td class="week-cell active">6</td>
+            <td class="week-cell active">7</td>
+            <td class="week-cell active">7</td>
+            <td class="partial-cell">2</td>
+            <td class="metric-cell" style="color:var(--ok)">6.6</td>
+            <td class="metric-cell" style="color:var(--danger)">0.0</td>
+            <td class="metric-cell">8</td>
+            <td class="order-cell"><span class="order-qty">53</span></td>
+            <td class="order-cell">S$12.40</td>
+            <td class="order-cell" style="color:var(--accent)">S$657</td>
+          </tr>
+          <!-- LOW STOCK -->
+          <tr>
+            <td><div class="prod-name">Natural Response Teats T3 3M+</div><div class="prod-sku">8720689012027</div></td>
+            <td style="font-family:var(--mono);font-size:11px;color:var(--muted)"></td>
+            <td><span class="badge low">▲ Low Stock</span></td>
+            <td class="num">18</td>
+            <td class="week-cell active">5</td>
+            <td class="week-cell active">6</td>
+            <td class="week-cell active">5</td>
+            <td class="week-cell active">6</td>
+            <td class="week-cell active">5</td>
+            <td class="week-cell active">6</td>
+            <td class="week-cell active">5</td>
+            <td class="week-cell active">5</td>
+            <td class="partial-cell">1</td>
+            <td class="metric-cell" style="color:var(--ok)">5.4</td>
+            <td class="metric-cell" style="color:var(--warn)">3.3</td>
+            <td class="metric-cell">8</td>
+            <td class="order-cell"><span class="order-qty">25</span></td>
+            <td class="order-cell">S$6.67</td>
+            <td class="order-cell" style="color:var(--accent)">S$167</td>
+          </tr>
+          <tr>
+            <td><div class="prod-name">Bottle Brush</div><div class="prod-sku">5012909006156</div></td>
+            <td style="font-family:var(--mono);font-size:11px;color:var(--muted)"></td>
+            <td><span class="badge low">▲ Low Stock</span></td>
+            <td class="num">24</td>
+            <td class="week-cell active">4</td>
+            <td class="week-cell active">5</td>
+            <td class="week-cell active">4</td>
+            <td class="week-cell active">5</td>
+            <td class="week-cell active">4</td>
+            <td class="week-cell active">4</td>
+            <td class="week-cell active">5</td>
+            <td class="week-cell active">4</td>
+            <td class="partial-cell">1</td>
+            <td class="metric-cell" style="color:var(--ok)">4.4</td>
+            <td class="metric-cell" style="color:var(--warn)">5.5</td>
+            <td class="metric-cell">8</td>
+            <td class="order-cell"><span class="order-qty">11</span></td>
+            <td class="order-cell">S$7.22</td>
+            <td class="order-cell" style="color:var(--accent)">S$79</td>
+          </tr>
+          <tr>
+            <td><div class="prod-name">Ultra Soft Breast Pads 60pk</div><div class="prod-sku">8720689025127</div></td>
+            <td style="font-family:var(--mono);font-size:11px;color:var(--muted)"></td>
+            <td><span class="badge low">▲ Low Stock</span></td>
+            <td class="num">45</td>
+            <td class="week-cell active">7</td>
+            <td class="week-cell active">9</td>
+            <td class="week-cell active">8</td>
+            <td class="week-cell active">9</td>
+            <td class="week-cell active">8</td>
+            <td class="week-cell active">8</td>
+            <td class="week-cell active">9</td>
+            <td class="week-cell active">7</td>
+            <td class="partial-cell">2</td>
+            <td class="metric-cell" style="color:var(--ok)">8.1</td>
+            <td class="metric-cell" style="color:var(--warn)">5.5</td>
+            <td class="metric-cell">8</td>
+            <td class="order-cell"><span class="order-qty">20</span></td>
+            <td class="order-cell">S$9.50</td>
+            <td class="order-cell" style="color:var(--accent)">S$190</td>
+          </tr>
+          <!-- HEALTHY -->
+          <tr>
+            <td><div class="prod-name">Natural Response Bottle 125ml</div><div class="prod-sku">8720689020009</div></td>
+            <td style="font-family:var(--mono);font-size:11px;color:var(--muted)"></td>
+            <td><span class="badge healthy">✓ Healthy</span></td>
+            <td class="num">88</td>
+            <td class="week-cell active">5</td>
+            <td class="week-cell active">6</td>
+            <td class="week-cell active">7</td>
+            <td class="week-cell active">6</td>
+            <td class="week-cell active">5</td>
+            <td class="week-cell active">6</td>
+            <td class="week-cell active">6</td>
+            <td class="week-cell active">5</td>
+            <td class="partial-cell">1</td>
+            <td class="metric-cell" style="color:var(--ok)">5.8</td>
+            <td class="metric-cell" style="color:var(--ok)">15.2</td>
+            <td class="metric-cell">8</td>
+            <td class="order-cell"><span class="order-qty">46</span></td>
+            <td class="order-cell">S$14.20</td>
+            <td class="order-cell" style="color:var(--accent)">S$653</td>
+          </tr>
+          <tr>
+            <td><div class="prod-name">Electric Single Breast Pump</div><div class="prod-sku">8720689030008</div></td>
+            <td style="font-family:var(--mono);font-size:11px;color:var(--muted)"></td>
+            <td><span class="badge healthy">✓ Healthy</span></td>
+            <td class="num">12</td>
+            <td class="week-cell active">1</td>
+            <td class="week-cell active">1</td>
+            <td class="week-cell">0</td>
+            <td class="week-cell active">1</td>
+            <td class="week-cell active">1</td>
+            <td class="week-cell active">1</td>
+            <td class="week-cell">0</td>
+            <td class="week-cell active">1</td>
+            <td class="partial-cell">0</td>
+            <td class="metric-cell" style="color:var(--ok)">0.8</td>
+            <td class="metric-cell" style="color:var(--ok)">15.0</td>
+            <td class="metric-cell">8</td>
+            <td class="order-cell"><span class="order-qty">6</span></td>
+            <td class="order-cell">S$88.00</td>
+            <td class="order-cell" style="color:var(--accent)">S$528</td>
+          </tr>
+          <!-- OVERSTOCK -->
+          <tr>
+            <td><div class="prod-name">Natural Response Teats T6 6M+</div><div class="prod-sku">8720689012089</div></td>
+            <td style="font-family:var(--mono);font-size:11px;color:var(--muted)"></td>
+            <td><span class="badge overstock">◆ Overstock</span></td>
+            <td class="num">210</td>
+            <td class="week-cell active">4</td>
+            <td class="week-cell active">5</td>
+            <td class="week-cell active">4</td>
+            <td class="week-cell active">4</td>
+            <td class="week-cell active">5</td>
+            <td class="week-cell active">4</td>
+            <td class="week-cell active">4</td>
+            <td class="week-cell active">4</td>
+            <td class="partial-cell">1</td>
+            <td class="metric-cell" style="color:var(--accent2)">4.3</td>
+            <td class="metric-cell" style="color:var(--accent2)">49.1</td>
+            <td class="metric-cell">8</td>
+            <td class="order-cell"><span class="order-qty zero">—</span></td>
+            <td class="order-cell" style="color:var(--muted)">S$6.67</td>
+            <td class="order-cell" style="color:var(--muted)">—</td>
+          </tr>
+          <tr>
+            <td><div class="prod-name">Soothie Pacifier 0-3M Pink</div><div class="prod-sku">8720689021037</div></td>
+            <td style="font-family:var(--mono);font-size:11px;color:var(--muted)"></td>
+            <td><span class="badge overstock">◆ Overstock</span></td>
+            <td class="num">156</td>
+            <td class="week-cell active">3</td>
+            <td class="week-cell active">3</td>
+            <td class="week-cell active">4</td>
+            <td class="week-cell active">3</td>
+            <td class="week-cell active">3</td>
+            <td class="week-cell active">4</td>
+            <td class="week-cell active">3</td>
+            <td class="week-cell active">3</td>
+            <td class="partial-cell">1</td>
+            <td class="metric-cell" style="color:var(--accent2)">3.3</td>
+            <td class="metric-cell" style="color:var(--accent2)">47.6</td>
+            <td class="metric-cell">8</td>
+            <td class="order-cell"><span class="order-qty zero">—</span></td>
+            <td class="order-cell" style="color:var(--muted)">S$4.80</td>
+            <td class="order-cell" style="color:var(--muted)">—</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="week-note">
+      <span><div class="dot-complete"></div> Complete week (Mon–Sun) — included in Avg/Wk calculation</span>
+      <span><div class="dot-partial"></div> * Current partial week (31 Mar–) — excluded from Avg/Wk</span>
+      <span style="color:var(--muted)">WTC = Weeks to Clearance (SOH ÷ Avg/Wk) · Suggest Qty = (Avg/Wk × lead weeks) − SOH</span>
+    </div>
+  </div>
+
+  <div style="font-family:var(--mono);font-size:11px;color:var(--muted);text-align:center;opacity:0.6;">
+    Budget cap prioritises Stockout → Low Stock → Healthy · Overstock SKUs skipped · Suggest Qty floored at 0
+  </div>
+
+</div>
+</body>
+</html>
