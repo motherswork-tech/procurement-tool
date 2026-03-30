@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Procurement Order Builder</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=Syne:wght@400;600;700;800&display=swap');
 
@@ -712,14 +713,14 @@
       <h2>Upload Brand Price List</h2>
 
       <div class="upload-zone" id="drop-zone">
-        <input type="file" id="csv-file" accept=".csv">
+        <input type="file" id="csv-file" accept=".xlsx,.csv">
         <span class="upload-icon">⬆</span>
-        <div class="upload-title">Drop CSV or click to browse</div>
+        <div class="upload-title">Drop Excel (.xlsx) or CSV</div>
         <div class="upload-hint">Required columns: barcode, product name, unit cost</div>
         <div class="upload-status" id="upload-status">No file loaded</div>
       </div>
 
-      <a class="sample-link" id="download-sample">↓ download sample template</a>
+      <a class="sample-link" id="download-sample">↓ download Excel template (.xlsx)</a>
 
       <!-- COLUMN MAPPING -->
       <div class="col-map" id="col-map">
@@ -733,7 +734,7 @@
           <select id="map-name"></select>
         </div>
         <div class="col-map-row">
-          <span class="col-map-label">Unit Cost (SGD)</span>
+          <span class="col-map-label">Unit Cost</span>
           <select id="map-cost"></select>
         </div>
       </div>
@@ -746,7 +747,7 @@
 
       <div class="params-grid">
         <div class="param-group">
-          <label>PO Budget (SGD)</label>
+          <label>PO Budget</label>
           <input type="number" id="budget" placeholder="e.g. 50000" min="0" step="1000">
           <span class="param-note">Leave blank = no cap</span>
         </div>
@@ -764,6 +765,16 @@
           <label>Brand Filter</label>
           <input type="text" id="brand-filter" placeholder="e.g. Stokke">
           <span class="param-note">Optional</span>
+        </div>
+        <div class="param-group">
+          <label>Price List Currency</label>
+          <input type="text" id="price-currency" placeholder="e.g. EUR" maxlength="5" style="text-transform:uppercase;">
+          <span class="param-note">Currency of unit costs above</span>
+        </div>
+        <div class="param-group">
+          <label>FX Rate → SGD</label>
+          <input type="number" id="fx-rate" placeholder="e.g. 1.46" min="0" step="0.0001">
+          <span class="param-note">1 [price currency] = ? SGD · leave blank = no conversion</span>
         </div>
       </div>
 
@@ -1098,36 +1109,55 @@ dropZone.addEventListener('drop', e => {
 fileInput.addEventListener('change', e => { if (e.target.files[0]) parseCSV(e.target.files[0]); });
 
 function parseCSV(file) {
-  Papa.parse(file, {
-    header: true, skipEmptyLines: true,
-    dynamicTyping: false,  // Keep barcodes as strings — prevents scientific notation
-    complete: res => {
-      uploadedRows = res.data;
-      const cols = res.meta.fields || [];
+  const isXlsx = file.name.toLowerCase().endsWith('.xlsx') || file.name.toLowerCase().endsWith('.xls');
+  if (isXlsx) {
+    const reader = new FileReader();
+    reader.onload = e => {
+      const wb = XLSX.read(e.target.result, { type: 'array', raw: false });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      // Use raw:false + defval:'' to keep barcodes as strings
+      const rows = XLSX.utils.sheet_to_json(ws, { raw: false, defval: '' });
+      uploadedRows = rows;
+      const cols = rows.length > 0 ? Object.keys(rows[0]) : [];
       populateColumnMap(cols);
-
-      // Warn if any barcode column values look like scientific notation
-      const bcCol = cols.find(c => c.toLowerCase().includes('barcode') || c.toLowerCase().includes('ean'));
-      if (bcCol) {
-        const sciCount = uploadedRows.filter(r => /^[\d.]+[eE][+\-]?\d+$/i.test(String(r[bcCol] || '').trim())).length;
-        if (sciCount > 0) {
-          uploadStatus.textContent = `⚠ ${uploadedRows.length} rows loaded — ${sciCount} barcodes in scientific notation (precision lost). Re-export from Excel with barcode column formatted as Text.`;
-          uploadStatus.className = 'upload-status';
-          uploadStatus.style.background = 'rgba(255,140,71,0.15)';
-          uploadStatus.style.color = '#ff8c47';
-          uploadStatus.style.display = 'inline-block';
-          colMap.classList.add('visible');
-          checkReady();
-          return;
-        }
-      }
-
       uploadStatus.textContent = `✓ ${uploadedRows.length} products loaded`;
       uploadStatus.className = 'upload-status loaded';
       colMap.classList.add('visible');
       checkReady();
-    }
-  });
+    };
+    reader.readAsArrayBuffer(file);
+  } else {
+    Papa.parse(file, {
+      header: true, skipEmptyLines: true,
+      dynamicTyping: false,
+      complete: res => {
+        uploadedRows = res.data;
+        const cols = res.meta.fields || [];
+        populateColumnMap(cols);
+
+        // Warn if scientific notation detected
+        const bcCol = cols.find(c => c.toLowerCase().includes('barcode') || c.toLowerCase().includes('ean'));
+        if (bcCol) {
+          const sciCount = uploadedRows.filter(r => /^[\d.]+[eE][+\-]?\d+$/i.test(String(r[bcCol] || '').trim())).length;
+          if (sciCount > 0) {
+            uploadStatus.textContent = `⚠ ${sciCount} barcodes in scientific notation — use the Excel template instead to avoid this.`;
+            uploadStatus.className = 'upload-status';
+            uploadStatus.style.background = 'rgba(255,140,71,0.15)';
+            uploadStatus.style.color = '#ff8c47';
+            uploadStatus.style.display = 'inline-block';
+            colMap.classList.add('visible');
+            checkReady();
+            return;
+          }
+        }
+
+        uploadStatus.textContent = `✓ ${uploadedRows.length} products loaded`;
+        uploadStatus.className = 'upload-status loaded';
+        colMap.classList.add('visible');
+        checkReady();
+      }
+    });
+  }
 }
 
 function populateColumnMap(cols) {
@@ -1168,12 +1198,15 @@ function checkReady() {
 
 // ==================== GENERATE ====================
 document.getElementById('btn-generate').addEventListener('click', async () => {
-  const barcodeCol = document.getElementById('map-barcode').value;
-  const nameCol    = document.getElementById('map-name').value;
-  const costCol    = document.getElementById('map-cost').value;
-  const budget     = parseFloat(document.getElementById('budget').value) || Infinity;
-  const leadTime   = parseFloat(document.getElementById('lead-time').value) || 2;
-  const targetMTC  = parseFloat(document.getElementById('target-mtc').value) || 3;
+  const barcodeCol   = document.getElementById('map-barcode').value;
+  const nameCol      = document.getElementById('map-name').value;
+  const costCol      = document.getElementById('map-cost').value;
+  const budget       = parseFloat(document.getElementById('budget').value) || Infinity;
+  const leadTime     = parseFloat(document.getElementById('lead-time').value) || 2;
+  const targetMTC    = parseFloat(document.getElementById('target-mtc').value) || 3;
+  const priceCurrency = (document.getElementById('price-currency').value || '').trim().toUpperCase();
+  const fxRate       = parseFloat(document.getElementById('fx-rate').value) || 1;
+  const hasFx        = fxRate !== 1 && priceCurrency;
 
   const progressWrap  = document.getElementById('progress-wrap');
   const progressFill  = document.getElementById('progress-fill');
@@ -1220,36 +1253,57 @@ document.getElementById('btn-generate').addEventListener('click', async () => {
   resultsData = uploadedRows.map(row => {
     const barcode = normaliseBarcode(row[barcodeCol]);
     const name = row[nameCol] || '';
-    const cost = parseFloat(String(row[costCol]).replace(/[^0-9.]/g, '')) || 0;
-    const apiData = salesData[barcode] || { monthly: [0,0,0,0,0,0], excluded: [false,false,false,false,false,false], exclusion_reasons: [], soh: null, adj_avg: 0, active_months: 0, last_sale_date: null };
+    const costRaw = parseFloat(String(row[costCol]).replace(/[^0-9.]/g, '')) || 0;
+    const costSGD = hasFx ? round(costRaw * fxRate, 4) : costRaw;
+    const cost = costSGD; // cost used for all calculations is always in target currency
+
+    // LEFT JOIN: always use procurement template as base, sales/SOH may be null
+    const apiData = salesData[barcode] || {
+      monthly: [0,0,0,0,0,0],
+      excluded: [false,false,false,false,false,false],
+      exclusion_reasons: [],
+      soh: null,
+      adj_avg: 0,
+      active_months: 0,
+      last_sale_date: null
+    };
+    const noSalesMatch = !salesData[barcode]; // flag: no BQ match found
+
     const monthly = apiData.monthly;
     const excluded = apiData.excluded;
     const total = monthly.reduce((a,b) => a+b, 0);
     const avg = round(total / 6, 2);
     const adj_avg = apiData.adj_avg ?? avg;
-    const active_months = apiData.active_months ?? 6;
+    const active_months = apiData.active_months ?? 0;
 
-    // SOH comes from BigQuery (soh table) via API
-    let soh;
+    // SOH: use uploaded SOH CSV match if API didn't return one
+    let soh = 0;
     if (apiData.soh !== null && apiData.soh !== undefined) {
       soh = apiData.soh;
-    } else {
-      soh = 0; // not found in SOH table — treat as unknown, show as 0
+    } else if (sohUploadedRows.length > 0) {
+      // Try matching from SOH CSV directly
+      const sohBcCol = document.getElementById('soh-map-barcode').value;
+      const sohQtyCol = document.getElementById('soh-map-qty').value;
+      const sohMatch = sohUploadedRows.find(r => normaliseBarcode(r[sohBcCol]) === barcode);
+      if (sohMatch && sohQtyCol) {
+        soh = parseFloat(String(sohMatch[sohQtyCol]).replace(/[^0-9.\-]/g,'')) || 0;
+      }
     }
 
-    const mtc = adj_avg > 0 ? soh / adj_avg : 99;
+    const mtc = adj_avg > 0 ? soh / adj_avg : (soh > 0 ? 99 : 0);
     const rawOrder = Math.max(0, Math.round((targetMTC + leadTime) * adj_avg - soh));
     const orderValue = rawOrder * cost;
 
     let risk = 'no-sales';
-    if (adj_avg > 0) {
+    if (noSalesMatch && soh === 0) risk = 'no-sales';
+    else if (adj_avg > 0) {
       if (soh === 0) risk = 'stockout';
       else if (mtc < 2) risk = 'low';
       else if (mtc > 4) risk = 'over';
       else risk = 'ok';
     }
 
-    return { barcode, name, cost, monthly, excluded, exclusion_reasons: apiData.exclusion_reasons || [], total, avg, adj_avg, active_months, soh, mtc, rawOrder, orderValue, risk, last_sale_date: apiData.last_sale_date, ...Object.fromEntries(MONTHS.map((m,i) => [m, monthly[i]])) };
+    return { barcode, name, costRaw, cost, priceCurrency, fxRate: hasFx ? fxRate : null, monthly, excluded, exclusion_reasons: apiData.exclusion_reasons || [], total, avg, adj_avg, active_months, soh, mtc, rawOrder, orderValue, risk, last_sale_date: apiData.last_sale_date, noSalesMatch, ...Object.fromEntries(MONTHS.map((m,i) => [m, monthly[i]])) };
   });
 
   function round(v, d) { return Math.round(v * 10**d) / 10**d; }
@@ -1353,10 +1407,17 @@ function renderTable() {
   const thead = document.getElementById('results-thead');
   const tbody = document.getElementById('results-tbody');
 
+  // Get currency info from results
+  const firstRow = resultsData[0];
+  const priceCurr = firstRow?.priceCurrency || '';
+  const fxR = firstRow?.fxRate;
+  const costLabel = priceCurr ? `Unit Cost (${priceCurr})` : 'Unit Cost';
+  const orderValLabel = fxR ? `Order Value (SGD @ ${fxR} FX)` : priceCurr ? `Order Value (${priceCurr})` : 'Order Value';
+
   const cols = [
     { key: 'barcode', label: 'Barcode' },
     { key: 'name', label: 'Product', cls: 'product-name' },
-    { key: 'cost', label: 'Unit Cost', cls: 'cost numeric' },
+    { key: 'cost', label: costLabel, cls: 'cost numeric' },
     ...SHORT_MONTHS.map((m,i) => ({ key: MONTHS[i], label: m, cls: 'numeric' })),
     { key: 'adj_avg', label: 'Adj Avg/Mo', cls: 'numeric highlight', tooltip: 'Average monthly sales excluding stockout months\n(months with 0 sales sandwiched between months with sales)\nUsed for order quantity calculation' },
     { key: 'soh', label: 'SOH', cls: 'numeric highlight' },
@@ -1364,7 +1425,7 @@ function renderTable() {
     { key: 'risk', label: 'Risk ⓘ', cls: 'risk-header', tooltip: 'Stockout: SOH = 0 with sales history\nLow Stock: MTC < 2 months\nHealthy: MTC 2–4 months\nOverstock: MTC > 4 months\nNo Sales: no L6M sales data' },
     { key: 'trend', label: 'Trend', cls: '' },
     { key: 'rawOrder', label: 'Order Qty', cls: 'order-qty numeric highlight', hcls: 'order-col-qty' },
-    { key: 'orderValue', label: 'Order Value', cls: 'order-value numeric highlight', hcls: 'order-col-val' },
+    { key: 'orderValue', label: orderValLabel, cls: 'order-value numeric highlight', hcls: 'order-col-val' },
   ];
 
   thead.innerHTML = `<tr>${cols.map(c =>
@@ -1428,18 +1489,21 @@ function renderTable() {
       `<div class="spark-bar" style="height:${Math.max(10, Math.round(v/maxM*20))}px"></div>`
     ).join('');
 
-    return `<tr>
-      <td>${r.barcode}</td>
+    const noMatchStyle = r.noSalesMatch ? 'opacity:0.6;' : '';
+    const noMatchTitle = r.noSalesMatch ? ' title="No sales history found in BQ for this barcode"' : '';
+
+    return `<tr style="${noMatchStyle}">
+      <td>${r.barcode}${r.noSalesMatch ? ' <span style="font-size:9px;color:var(--muted);font-family:var(--mono)">·no BQ match</span>' : ''}</td>
       <td class="product-name" title="${r.name}">${r.name}</td>
-      <td class="cost numeric">$${r.cost.toFixed(2)}</td>
-      ${monthly.map((v,i) => `<td class="numeric${r.excluded[i] ? ' excluded-month' : ''}" title="${r.excluded[i] ? (r.exclusion_reasons?.[i] || 'Excluded: stocked out early in month') : ''}">${v||0}${r.excluded[i]?'*':''}</td>`).join('')}
+      <td class="cost numeric">${r.priceCurrency ? r.priceCurrency+' ' : ''}${r.costRaw.toFixed(2)}${r.fxRate ? `<div style="font-size:9px;color:var(--muted);">SGD ${r.cost.toFixed(2)}</div>` : ''}</td>
+      ${months.map((v,i) => `<td class="numeric${r.excluded[i] ? ' excluded-month' : ''}" title="${r.excluded[i] ? (r.exclusion_reasons?.[i] || 'Excluded: stocked out early in month') : ''}">${v||0}${r.excluded[i]?'*':''}</td>`).join('')}
       <td class="numeric highlight">${r.adj_avg.toFixed(1)}</td>
-      <td class="numeric highlight">${r.soh}</td>
-      <td class="numeric">${r.avg>0 ? r.mtc.toFixed(1)+'m' : '—'}</td>
+      <td class="numeric highlight">${r.soh ?? '—'}</td>
+      <td class="numeric">${r.adj_avg > 0 ? r.mtc.toFixed(1)+'m' : '—'}</td>
       <td><span class="badge ${r.risk}">${RISK_LABEL[r.risk]}</span></td>
       <td><div class="spark">${spark}</div></td>
       <td class="order-qty numeric highlight">${r.rawOrder > 0 ? r.rawOrder : '—'}</td>
-      <td class="order-value numeric highlight">${r.rawOrder > 0 ? '$'+r.orderValue.toLocaleString('en',{minimumFractionDigits:2,maximumFractionDigits:2}) : '—'}</td>
+      <td class="order-value numeric highlight">${r.rawOrder > 0 ? (r.fxRate ? 'SGD ' : (r.priceCurrency ? r.priceCurrency+' ' : '$'))+(r.orderValue.toLocaleString('en',{minimumFractionDigits:2,maximumFractionDigits:2})) : '—'}</td>
     </tr>`;
   }).join('');
 }
@@ -1461,14 +1525,23 @@ document.getElementById('search-input').addEventListener('input', e => {
 
 // ==================== EXPORT CSV ====================
 document.getElementById('btn-export-csv').addEventListener('click', () => {
-  const headers = ['Barcode','Product Name','Unit Cost (SGD)',...MONTHS,'Avg/Mo','SOH','MTC','Risk','Suggested Order Qty','Suggested Order Value (SGD)'];
+  const firstRow = resultsData[0];
+  const priceCurr = firstRow?.priceCurrency || '';
+  const fxR = firstRow?.fxRate;
+  const costHeader = priceCurr ? `Unit Cost (${priceCurr})` : 'Unit Cost';
+  const orderValHeader = fxR ? `Order Value (SGD @ FX ${fxR})` : priceCurr ? `Order Value (${priceCurr})` : 'Order Value (SGD)';
+  const fxNote = fxR ? `FX Rate: 1 ${priceCurr} = ${fxR} SGD` : '';
+
+  const headers = ['Barcode','Product Name', costHeader, ...(fxR ? ['Unit Cost (SGD)'] : []), ...MONTHS,'Avg/Mo','SOH','MTC','Risk','Suggested Order Qty', orderValHeader];
   const rows = resultsData.map(r => [
-    r.barcode, r.name, r.cost,
+    r.barcode, r.name, r.costRaw,
+    ...(fxR ? [r.cost.toFixed(4)] : []),
     ...MONTHS.map(m => r[m]||0),
-    r.avg.toFixed(1), r.soh, r.avg>0?r.mtc.toFixed(2):'', r.risk,
-    r.rawOrder, r.orderValue.toFixed(2)
+    r.avg.toFixed(1), r.soh ?? '', r.adj_avg>0?r.mtc.toFixed(2):'', r.risk,
+    r.rawOrder || '', r.rawOrder > 0 ? r.orderValue.toFixed(2) : ''
   ]);
-  const csv = [headers, ...rows].map(r => r.map(v => `"${v}"`).join(',')).join('\n');
+  const metaRow = fxNote ? [[fxNote], []] : [];
+  const csv = [...metaRow, headers, ...rows].map(r => r.map(v => `"${v}"`).join(',')).join('\n');
   const blob = new Blob([csv], {type:'text/csv'});
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a'); a.href = url;
@@ -1504,23 +1577,36 @@ ORDER BY avg_monthly DESC;`;
 
 // ==================== SAMPLE TEMPLATE DOWNLOAD ====================
 document.getElementById('download-sample').addEventListener('click', () => {
-  const csv = [
-    ['barcode','product_name','unit_cost_sgd'],
-    ['7040355305416','Stokke Tripp Trapp Natural','189.00'],
-    ['7040355305423','Stokke Tripp Trapp White','189.00'],
-    ['7040355305430','Stokke Tripp Trapp Black','189.00'],
-    ['7040355309889','Stokke Tripp Trapp Storm Grey','189.00'],
-    ['7040355316450','Stokke Tripp Trapp Hazy Grey','189.00'],
-    ['7040355316474','Stokke Steps Chair White/Natural','439.00'],
-    ['5015827031989','Stokke Clikk High Chair Sunny Coral','299.00'],
-    ['5015827031996','Stokke Clikk High Chair Teal','299.00'],
-    ['5015827032009','Stokke Clikk High Chair Timeless Grey','299.00'],
-  ].map(r => r.join(',')).join('\n');
-  const blob = new Blob([csv], {type:'text/csv'});
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a'); a.href = url;
-  a.download = 'procurement_template.csv';
-  a.click(); URL.revokeObjectURL(url);
+  const rows = [
+    { barcode: '7040355305416', product_name: 'Stokke Tripp Trapp Natural',       unit_cost: 189.00 },
+    { barcode: '7040355305423', product_name: 'Stokke Tripp Trapp White',          unit_cost: 189.00 },
+    { barcode: '7040355305430', product_name: 'Stokke Tripp Trapp Black',          unit_cost: 189.00 },
+    { barcode: '7040355309889', product_name: 'Stokke Tripp Trapp Storm Grey',     unit_cost: 189.00 },
+    { barcode: '7040355316450', product_name: 'Stokke Tripp Trapp Hazy Grey',      unit_cost: 189.00 },
+    { barcode: '7040355316474', product_name: 'Stokke Steps Chair White/Natural',  unit_cost: 439.00 },
+    { barcode: '5015827031989', product_name: 'Stokke Clikk High Chair Sunny Coral', unit_cost: 299.00 },
+    { barcode: '5015827031996', product_name: 'Stokke Clikk High Chair Teal',      unit_cost: 299.00 },
+    { barcode: '5015827032009', product_name: 'Stokke Clikk High Chair Timeless Grey', unit_cost: 299.00 },
+  ];
+
+  const ws = XLSX.utils.json_to_sheet(rows);
+
+  // Format barcode column (col A, rows 2 onwards) as Text to prevent Excel converting to numbers
+  const range = XLSX.utils.decode_range(ws['!ref']);
+  for (let row = 1; row <= range.e.r; row++) {
+    const cellAddr = XLSX.utils.encode_cell({ r: row, c: 0 });
+    if (ws[cellAddr]) {
+      ws[cellAddr].t = 's'; // force string type
+      ws[cellAddr].z = '@'; // text format
+    }
+  }
+
+  // Set column widths
+  ws['!cols'] = [{ wch: 18 }, { wch: 45 }, { wch: 16 }];
+
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Price List');
+  XLSX.writeFile(wb, 'procurement_template.xlsx');
 });
 
 // Update badge based on mode
