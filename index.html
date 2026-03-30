@@ -752,14 +752,14 @@
           <span class="param-note">Leave blank = no cap</span>
         </div>
         <div class="param-group">
-          <label>Lead Time (months)</label>
-          <input type="number" id="lead-time" value="2" min="1" max="12" step="0.5">
-          <span class="param-note">Default: 2 months</span>
+          <label>Lead Time (weeks)</label>
+          <input type="number" id="lead-time" value="8" min="1" max="52" step="1">
+          <span class="param-note">Default: 8 weeks</span>
         </div>
         <div class="param-group">
-          <label>Target SOH (MTC)</label>
-          <input type="number" id="target-mtc" value="3" min="1" max="12" step="0.5">
-          <span class="param-note">Target months to cover</span>
+          <label>Target SOH (WTC)</label>
+          <input type="number" id="target-mtc" value="4" min="1" max="52" step="1">
+          <span class="param-note">Target weeks to cover</span>
         </div>
         <div class="param-group">
           <label>Brand Filter</label>
@@ -779,8 +779,8 @@
       </div>
 
       <div class="mtc-hint">
-        <strong>Order formula:</strong> (target MTC + lead time) × avg monthly sales − current SOH<br>
-        <strong>Risk:</strong> &lt;2 months = Low Stock · &gt;4 months = Overstock
+        <strong>Order formula:</strong> (target WTC + lead time weeks) × avg weekly sales − current SOH<br>
+        <strong>Risk:</strong> &lt;2 weeks = Low Stock · &gt;4 weeks = Overstock · * = partial week excluded from avg
       </div>
 
       <div id="progress-wrap" style="display:none; margin-top:16px;">
@@ -951,8 +951,13 @@ const DEMO_BQ_SALES = {
 };
 
 // ==================== API CONFIG ====================
-const API_URL = 'https://procurement-api-kgt3f3f3uq-as.a.run.app';
-const DEMO_MODE = !API_URL;
+const API_URL = 'https://retail-intelligence-api-kgt3f3f3uq-as.a.run.app';
+const PROCUREMENT_API = 'https://procurement-api-kgt3f3f3uq-as.a.run.app';
+const DEMO_MODE = false;
+
+// Week labels — populated dynamically from API response
+let WEEKS = [];       // full labels e.g. "03 Feb" or "31 Mar*"
+let SHORT_WEEKS = []; // same as WEEKS for procurement
 
 async function queryBigQuery(barcodes, sohRows) {
   if (DEMO_MODE) {
@@ -961,18 +966,18 @@ async function queryBigQuery(barcodes, sohRows) {
         const result = {};
         barcodes.forEach(bc => {
           const key = String(bc).trim();
-          const monthly = DEMO_BQ_SALES[key] || MONTHS.map(() => Math.max(0, Math.floor(Math.random()*15 - 3)));
-          result[key] = { monthly, soh: Math.round(monthly.reduce((a,b)=>a+b,0)/6 * (0.5 + Math.random()*2)), adj_avg: null, active_months: 6, excluded: monthly.map(()=>false) };
+          const weekly = Array(9).fill(0).map(() => Math.max(0, Math.floor(Math.random()*8)));
+          result[key] = { weekly, soh: Math.round(weekly.slice(0,8).reduce((a,b)=>a+b,0)/8 * (0.5 + Math.random()*2)), adj_avg: null, excluded: weekly.map((_,i)=>i===8) };
         });
         resolve(result);
       }, 1200);
     });
   }
 
-  // 1. Upload SOH if provided
+  // 1. Upload SOH via procurement API if provided
   if (sohRows && sohRows.length > 0) {
     try {
-      await fetch(`${API_URL}/soh`, {
+      await fetch(`${PROCUREMENT_API}/soh`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ rows: sohRows })
@@ -980,10 +985,11 @@ async function queryBigQuery(barcodes, sohRows) {
     } catch(e) { console.warn('SOH upload failed:', e); }
   }
 
-  // 2. Fetch sales + SOH from BigQuery
-  const response = await fetch(`${API_URL}/sales`, {
+  // 2. Fetch weekly sales from retail-intelligence API
+  const response = await fetch(`${API_URL}/procurement/weekly-sales`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
+    credentials: 'omit',
     body: JSON.stringify({ barcodes: barcodes.map(b => String(b).trim()) })
   });
   if (!response.ok) {
@@ -992,24 +998,44 @@ async function queryBigQuery(barcodes, sohRows) {
   }
   const json = await response.json();
 
-  // Update month labels from API
-  if (json.data[0]?.months) {
-    json.data[0].months.forEach((m, i) => {
-      if (i < MONTHS.length) { MONTHS[i] = m.label; SHORT_MONTHS[i] = m.label.slice(0,3); }
-    });
-  }
+  // Build week labels from response
+  const weekStarts = json.week_starts || [];
+  const currentWeekStart = json.current_week_start;
+  WEEKS = weekStarts.map(ws => {
+    const d = new Date(ws + 'T00:00:00');
+    const label = d.toLocaleDateString('en-GB', { day:'2-digit', month:'short' });
+    return ws === currentWeekStart ? label + '*' : label;
+  });
+  SHORT_WEEKS = [...WEEKS];
 
-  // Remap to { barcode: { monthly, soh, adj_avg, active_months, excluded } }
+  // Remap to { barcode: { weekly, soh, adj_avg, excluded } }
   const result = {};
+
+  // First get SOH from procurement API
+  let sohFromApi = {};
+  try {
+    const sohResp = await fetch(`${PROCUREMENT_API}/sales`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ barcodes: barcodes.map(b => String(b).trim()) })
+    });
+    if (sohResp.ok) {
+      const sohJson = await sohResp.json();
+      sohJson.data?.forEach(item => { sohFromApi[item.barcode] = item.soh; });
+    }
+  } catch(e) { console.warn('SOH fetch failed:', e); }
+
   json.data.forEach(item => {
+    const weekly = item.weeks.map(w => w.qty);
+    const excluded = item.weeks.map(w => !w.is_complete);
     result[item.barcode] = {
-      monthly: item.months.map(m => m.qty),
-      excluded: item.months.map(m => m.excluded),
-      exclusion_reasons: item.months.map(m => m.exclusion_reason),
-      soh: item.soh,
-      adj_avg: item.adj_avg_monthly,
-      active_months: item.active_months,
-      last_sale_date: item.last_sale_date,
+      weekly,
+      excluded,
+      exclusion_reasons: item.weeks.map(w => w.is_complete ? null : 'Partial week — excluded from avg'),
+      soh: sohFromApi[item.barcode] ?? null,
+      adj_avg: item.adj_avg_weekly,
+      active_months: item.weeks.filter(w => w.qty > 0 && w.is_complete).length,
+      last_sale_date: null,
     };
   });
   return result;
@@ -1294,20 +1320,21 @@ document.getElementById('btn-generate').addEventListener('click', async () => {
 
     // LEFT JOIN: always use procurement template as base, sales/SOH may be null
     const apiData = salesData[barcode] || {
-      monthly: [0,0,0,0,0,0],
-      excluded: [false,false,false,false,false,false],
+      weekly: Array(9).fill(0),
+      excluded: Array(8).fill(false).concat([true]),
       exclusion_reasons: [],
       soh: null,
       adj_avg: 0,
       active_months: 0,
       last_sale_date: null
     };
-    const noSalesMatch = !salesData[barcode]; // flag: no BQ match found
+    const noSalesMatch = !salesData[barcode];
 
-    const monthly = apiData.monthly;
-    const excluded = apiData.excluded;
-    const total = monthly.reduce((a,b) => a+b, 0);
-    const avg = round(total / 6, 2);
+    const weekly = apiData.weekly || Array(9).fill(0);
+    const excluded = apiData.excluded || weekly.map(() => false);
+    const total = weekly.filter((_,i) => !excluded[i]).reduce((a,b) => a+b, 0);
+    const completeCount = excluded.filter(e => !e).length || 1;
+    const avg = round(total / completeCount, 2);
     const adj_avg = apiData.adj_avg ?? avg;
     const active_months = apiData.active_months ?? 0;
 
@@ -1338,7 +1365,7 @@ document.getElementById('btn-generate').addEventListener('click', async () => {
       else risk = 'ok';
     }
 
-    return { barcode, name, costRaw, cost, priceCurrency, fxRate: hasFx ? fxRate : null, monthly, excluded, exclusion_reasons: apiData.exclusion_reasons || [], total, avg, adj_avg, active_months, soh, mtc, rawOrder, orderValue, risk, last_sale_date: apiData.last_sale_date, noSalesMatch, ...Object.fromEntries(MONTHS.map((m,i) => [m, monthly[i]])) };
+    return { barcode, name, costRaw, cost, priceCurrency, fxRate: hasFx ? fxRate : null, weekly, excluded, exclusion_reasons: apiData.exclusion_reasons || [], total, avg, adj_avg, active_months, soh, mtc, rawOrder, orderValue, risk, last_sale_date: apiData.last_sale_date, noSalesMatch, ...Object.fromEntries(WEEKS.map((w,i) => [w, weekly[i] ?? 0])) };
   });
 
   function round(v, d) { return Math.round(v * 10**d) / 10**d; }
@@ -1453,11 +1480,11 @@ function renderTable() {
     { key: 'barcode', label: 'Barcode' },
     { key: 'name', label: 'Product', cls: 'product-name' },
     { key: 'cost', label: costLabel, cls: 'cost numeric' },
-    ...SHORT_MONTHS.map((m,i) => ({ key: MONTHS[i], label: m, cls: 'numeric' })),
-    { key: 'adj_avg', label: 'Adj Avg/Mo', cls: 'numeric highlight', tooltip: 'Average monthly sales excluding stockout months\n(months with 0 sales sandwiched between months with sales)\nUsed for order quantity calculation' },
+    ...WEEKS.map((w,i) => ({ key: w, label: w, cls: `numeric${i === WEEKS.length-1 ? ' excluded-month' : ''}` })),
+    { key: 'adj_avg', label: 'Avg/Wk', cls: 'numeric highlight', tooltip: 'Average weekly sales from last 8 complete weeks (Mon–Sun)\nPartial current week (*) excluded from average\nUsed for order quantity calculation' },
     { key: 'soh', label: 'SOH', cls: 'numeric highlight' },
-    { key: 'mtc', label: 'MTC', cls: 'numeric' },
-    { key: 'risk', label: 'Risk ⓘ', cls: 'risk-header', tooltip: 'Stockout: SOH = 0 with sales history\nLow Stock: MTC < 2 months\nHealthy: MTC 2–4 months\nOverstock: MTC > 4 months\nNo Sales: no L6M sales data' },
+    { key: 'mtc', label: 'WTC', cls: 'numeric', },
+    { key: 'risk', label: 'Risk ⓘ', cls: 'risk-header', tooltip: 'Stockout: SOH = 0 with sales history\nLow Stock: WTC < 2 weeks\nHealthy: WTC 2–4 weeks\nOverstock: WTC > 4 weeks\nNo Sales: no sales data' },
     { key: 'trend', label: 'Trend', cls: '' },
     { key: 'rawOrder', label: 'Order Qty', cls: 'order-qty numeric highlight', hcls: 'order-col-qty' },
     { key: 'orderValue', label: orderValLabel, cls: 'order-value numeric highlight', hcls: 'order-col-val' },
@@ -1518,10 +1545,10 @@ function renderTable() {
   const RISK_LABEL = { stockout:'Stockout', low:'Low Stock', ok:'Healthy', over:'Overstock', 'no-sales':'No Sales' };
 
   tbody.innerHTML = data.map(r => {
-    const months = MONTHS.map(m => r[m] || 0);
-    const maxM = Math.max(...months, 1);
-    const spark = months.map(v =>
-      `<div class="spark-bar" style="height:${Math.max(10, Math.round(v/maxM*20))}px"></div>`
+    const weeks = WEEKS.map(w => r[w] || 0);
+    const maxW = Math.max(...weeks, 1);
+    const spark = weeks.map((v,i) =>
+      `<div class="spark-bar${r.excluded[i] ? ' excluded-bar' : ''}" style="height:${Math.max(10, Math.round(v/maxW*20))}px;${r.excluded[i]?'opacity:0.4;':''}" title="${WEEKS[i]}"></div>`
     ).join('');
 
     const noMatchStyle = r.noSalesMatch ? 'opacity:0.6;' : '';
@@ -1531,7 +1558,7 @@ function renderTable() {
       <td>${r.barcode}${r.noSalesMatch ? ' <span style="font-size:9px;color:var(--muted);font-family:var(--mono)">·no BQ match</span>' : ''}</td>
       <td class="product-name" title="${r.name}">${r.name}</td>
       <td class="cost numeric">${r.priceCurrency ? r.priceCurrency+' ' : ''}${r.costRaw.toFixed(2)}${r.fxRate ? `<div style="font-size:9px;color:var(--muted);">SGD ${r.cost.toFixed(2)}</div>` : ''}</td>
-      ${months.map((v,i) => `<td class="numeric${r.excluded[i] ? ' excluded-month' : ''}" title="${r.excluded[i] ? (r.exclusion_reasons?.[i] || 'Excluded: stocked out early in month') : ''}">${r.noSalesMatch ? '<span style="color:var(--muted)">—</span>' : (v||0)}${r.excluded[i]?'*':''}</td>`).join('')}
+      ${weeks.map((v,i) => `<td class="numeric${r.excluded[i] ? ' excluded-month' : ''}" title="${r.excluded[i] ? (r.exclusion_reasons?.[i] || 'Partial week — excluded from avg') : (WEEKS[i]||'')}">${r.noSalesMatch ? '<span style="color:var(--muted)">—</span>' : (v||0)}${r.excluded[i]?'*':''}</td>`).join('')}
       <td class="numeric highlight">${r.noSalesMatch ? '<span style="color:var(--muted)">—</span>' : r.adj_avg.toFixed(1)}</td>
       <td class="numeric highlight">${r.soh ?? '—'}</td>
       <td class="numeric">${r.adj_avg > 0 ? r.mtc.toFixed(1)+'m' : '—'}</td>
@@ -1567,12 +1594,12 @@ document.getElementById('btn-export-csv').addEventListener('click', () => {
   const orderValHeader = fxR ? `Order Value (SGD @ FX ${fxR})` : priceCurr ? `Order Value (${priceCurr})` : 'Order Value (SGD)';
   const fxNote = fxR ? `FX Rate: 1 ${priceCurr} = ${fxR} SGD` : '';
 
-  const headers = ['Barcode','Product Name', costHeader, ...(fxR ? ['Unit Cost (SGD)'] : []), ...MONTHS,'Avg/Mo','SOH','MTC','Risk','Suggested Order Qty', orderValHeader];
+  const headers = ['Barcode','Product Name', costHeader, ...(fxR ? ['Unit Cost (SGD)'] : []), ...WEEKS,'Avg/Wk','SOH','WTC','Risk','Suggested Order Qty', orderValHeader];
   const rows = resultsData.map(r => [
     r.barcode, r.name, r.costRaw,
     ...(fxR ? [r.cost.toFixed(4)] : []),
-    ...MONTHS.map(m => r[m]||0),
-    r.avg.toFixed(1), r.soh ?? '', r.adj_avg>0?r.mtc.toFixed(2):'', r.risk,
+    ...WEEKS.map(w => r[w]||0),
+    r.avg.toFixed(1), r.soh ?? '', r.adj_avg>0?r.mtc.toFixed(1):'', r.risk,
     r.rawOrder || '', r.rawOrder > 0 ? r.orderValue.toFixed(2) : ''
   ]);
   const metaRow = fxNote ? [[fxNote], []] : [];
