@@ -1115,13 +1115,48 @@ function parseCSV(file) {
     reader.onload = e => {
       const wb = XLSX.read(e.target.result, { type: 'array', raw: false });
       const ws = wb.Sheets[wb.SheetNames[0]];
-      // Use raw:false + defval:'' to keep barcodes as strings
+      // raw:false reads formatted values; but barcodes stored as numbers still need fixing
       const rows = XLSX.utils.sheet_to_json(ws, { raw: false, defval: '' });
-      uploadedRows = rows;
+
+      // Fix barcodes stored as numbers — SheetJS may return them in scientific notation
+      // We read the raw numeric value and convert to integer string
+      const rawRows = XLSX.utils.sheet_to_json(ws, { raw: true, defval: '' });
       const cols = rows.length > 0 ? Object.keys(rows[0]) : [];
+      const bcCol = cols.find(c => c.toLowerCase().includes('barcode') || c.toLowerCase().includes('ean') || c.toLowerCase().includes('gtin'));
+
+      if (bcCol) {
+        rows.forEach((row, i) => {
+          const rawVal = rawRows[i]?.[bcCol];
+          if (typeof rawVal === 'number') {
+            // Convert raw number to integer string — preserves all digits
+            row[bcCol] = String(Math.round(rawVal));
+          } else {
+            row[bcCol] = normaliseBarcode(String(row[bcCol] || ''));
+          }
+        });
+      }
+
+      uploadedRows = rows;
       populateColumnMap(cols);
-      uploadStatus.textContent = `✓ ${uploadedRows.length} products loaded`;
-      uploadStatus.className = 'upload-status loaded';
+
+      // Warn if any barcodes still look truncated (end in many zeros)
+      if (bcCol) {
+        const truncCount = uploadedRows.filter(r => /0{4,}$/.test(String(r[bcCol] || ''))).length;
+        if (truncCount > 0) {
+          uploadStatus.textContent = `⚠ ${truncCount} barcodes may be truncated (ending in zeros). In Excel: select barcode column → Format Cells → Text → re-enter values.`;
+          uploadStatus.className = 'upload-status';
+          uploadStatus.style.background = 'rgba(255,140,71,0.15)';
+          uploadStatus.style.color = '#ff8c47';
+          uploadStatus.style.display = 'inline-block';
+        } else {
+          uploadStatus.textContent = `✓ ${uploadedRows.length} products loaded`;
+          uploadStatus.className = 'upload-status loaded';
+        }
+      } else {
+        uploadStatus.textContent = `✓ ${uploadedRows.length} products loaded`;
+        uploadStatus.className = 'upload-status loaded';
+      }
+
       colMap.classList.add('visible');
       checkReady();
     };
@@ -1496,8 +1531,8 @@ function renderTable() {
       <td>${r.barcode}${r.noSalesMatch ? ' <span style="font-size:9px;color:var(--muted);font-family:var(--mono)">·no BQ match</span>' : ''}</td>
       <td class="product-name" title="${r.name}">${r.name}</td>
       <td class="cost numeric">${r.priceCurrency ? r.priceCurrency+' ' : ''}${r.costRaw.toFixed(2)}${r.fxRate ? `<div style="font-size:9px;color:var(--muted);">SGD ${r.cost.toFixed(2)}</div>` : ''}</td>
-      ${months.map((v,i) => `<td class="numeric${r.excluded[i] ? ' excluded-month' : ''}" title="${r.excluded[i] ? (r.exclusion_reasons?.[i] || 'Excluded: stocked out early in month') : ''}">${v||0}${r.excluded[i]?'*':''}</td>`).join('')}
-      <td class="numeric highlight">${r.adj_avg.toFixed(1)}</td>
+      ${months.map((v,i) => `<td class="numeric${r.excluded[i] ? ' excluded-month' : ''}" title="${r.excluded[i] ? (r.exclusion_reasons?.[i] || 'Excluded: stocked out early in month') : ''}">${r.noSalesMatch ? '<span style="color:var(--muted)">—</span>' : (v||0)}${r.excluded[i]?'*':''}</td>`).join('')}
+      <td class="numeric highlight">${r.noSalesMatch ? '<span style="color:var(--muted)">—</span>' : r.adj_avg.toFixed(1)}</td>
       <td class="numeric highlight">${r.soh ?? '—'}</td>
       <td class="numeric">${r.adj_avg > 0 ? r.mtc.toFixed(1)+'m' : '—'}</td>
       <td><span class="badge ${r.risk}">${RISK_LABEL[r.risk]}</span></td>
