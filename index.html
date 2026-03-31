@@ -357,6 +357,7 @@
   td.cost { color: var(--accent2); font-weight: 500; }
   td.order-qty { color: var(--accent); font-weight: 700; background: var(--accent-dim); border-left: 2px solid rgba(30,94,245,0.3); }
   td.order-value { color: var(--success); font-weight: 700; background: rgba(16,185,129,0.06); border-right: 2px solid rgba(16,185,129,0.25); }
+  td.oos-date { font-family: var(--mono); font-size: 11px; white-space: nowrap; }
 
   .badge { display: inline-flex; align-items: center; padding: 3px 8px; border-radius: 4px; font-size: 10px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; }
   .badge.stockout { background: var(--danger-dim); color: var(--danger); }
@@ -725,6 +726,7 @@ async function queryBigQuery(barcodes, sohRows) {
 
   // First get SOH from procurement API
   let sohFromApi = {};
+  let lastSaleDateFromApi = {};
   try {
     const sohResp = await fetch(`${PROCUREMENT_API}/sales`, {
       method: 'POST',
@@ -733,7 +735,10 @@ async function queryBigQuery(barcodes, sohRows) {
     });
     if (sohResp.ok) {
       const sohJson = await sohResp.json();
-      sohJson.data?.forEach(item => { sohFromApi[item.barcode] = item.soh; });
+      sohJson.data?.forEach(item => {
+        sohFromApi[item.barcode] = item.soh;
+        lastSaleDateFromApi[item.barcode] = item.last_sale_date || null;
+      });
     }
   } catch(e) { console.warn('SOH fetch failed:', e); }
 
@@ -747,7 +752,7 @@ async function queryBigQuery(barcodes, sohRows) {
       soh: sohFromApi[item.barcode] ?? null,
       adj_avg: item.adj_avg_weekly,
       active_months: item.weeks.filter(w => w.qty > 0 && w.is_complete).length,
-      last_sale_date: null,
+      last_sale_date: lastSaleDateFromApi[item.barcode] ?? null,
     };
   });
   return result;
@@ -1193,9 +1198,10 @@ function renderTable() {
     { key: 'name', label: 'Product', cls: 'product-name' },
     { key: 'cost', label: costLabel, cls: 'cost numeric' },
     ...WEEKS.map((w,i) => ({ key: w, label: w, cls: `numeric${i === WEEKS.length-1 ? ' excluded-month' : ''}` })),
-    { key: 'adj_avg', label: 'Avg/Wk', cls: 'numeric highlight', tooltip: 'Average weekly sales from last 8 complete weeks (Mon–Sun)\nPartial current week (*) excluded from average\nUsed for order quantity calculation' },
+    { key: 'adj_avg', label: 'Avg/Wk', cls: 'numeric highlight', tooltip: 'Average units sold per week — adjusted for reliability\n\nData starts 1 Mar 2026 (Odoo ERP go-live).\nOlder history is excluded.\n\nWeeks removed from the average:\n① Current week (*) — not complete yet\n② Last selling week if product is now OOS — demand was constrained by low stock\n③ Any week with no Odoo data\n\nResult = best estimate of true weekly demand.' },
     { key: 'soh', label: 'SOH', cls: 'numeric highlight' },
-    { key: 'mtc', label: 'WTC', cls: 'numeric', },
+    { key: 'mtc', label: 'WTC', cls: 'numeric' },
+    { key: 'oos_date', label: 'OOS Since', cls: 'oos-date', tooltip: 'Date of last recorded sale.\nOnly shown for Stockout products (SOH = 0 with sales history).\nIndicates how long the product has been out of stock.' },
     { key: 'risk', label: 'Risk ⓘ', cls: 'risk-header', tooltip: 'Stockout: SOH = 0 with sales history\nLow Stock: WTC < 2 weeks\nHealthy: WTC 2–4 weeks\nOverstock: WTC > 4 weeks\nNo Sales: no sales data' },
     { key: 'trend', label: 'Trend', cls: '' },
     { key: 'rawOrder', label: 'Order Qty', cls: 'order-qty numeric highlight', hcls: 'order-col-qty' },
@@ -1266,6 +1272,18 @@ function renderTable() {
     const noMatchStyle = r.noSalesMatch ? 'opacity:0.6;' : '';
     const noMatchTitle = r.noSalesMatch ? ' title="No sales history found in BQ for this barcode"' : '';
 
+    // OOS Since cell — only meaningful for stockout
+    let oosCell = '<td class="oos-date"><span style="color:var(--muted)">—</span></td>';
+    if (r.risk === 'stockout' && r.last_sale_date) {
+      const oosD = new Date(r.last_sale_date + 'T00:00:00');
+      const oosLabel = oosD.toLocaleDateString('en-GB', { day:'2-digit', month:'short', year:'numeric' });
+      const daysAgo = Math.floor((Date.now() - oosD.getTime()) / 86400000);
+      oosCell = `<td class="oos-date" title="Last sale: ${oosLabel}">
+        <span style="color:var(--danger);font-weight:600;">${oosLabel}</span>
+        <div style="font-size:9px;color:var(--muted);margin-top:2px;">${daysAgo}d ago</div>
+      </td>`;
+    }
+
     return `<tr style="${noMatchStyle}">
       <td>${r.barcode}${r.noSalesMatch ? ' <span style="font-size:9px;color:var(--muted);font-family:var(--mono)">·no BQ match</span>' : ''}</td>
       <td class="product-name" title="${r.name}">${r.name}</td>
@@ -1273,7 +1291,8 @@ function renderTable() {
       ${weeks.map((v,i) => `<td class="numeric${r.excluded[i] ? ' excluded-month' : ''}" title="${r.excluded[i] ? (r.exclusion_reasons?.[i] || 'Partial week — excluded from avg') : (WEEKS[i]||'')}">${r.noSalesMatch ? '<span style="color:var(--muted)">—</span>' : (v||0)}${r.excluded[i]?'*':''}</td>`).join('')}
       <td class="numeric highlight">${r.noSalesMatch ? '<span style="color:var(--muted)">—</span>' : r.adj_avg.toFixed(1)}</td>
       <td class="numeric highlight">${r.soh ?? '—'}</td>
-      <td class="numeric">${r.adj_avg > 0 ? r.mtc.toFixed(1)+'m' : '—'}</td>
+      <td class="numeric">${r.adj_avg > 0 ? r.mtc.toFixed(1)+'w' : '—'}</td>
+      ${oosCell}
       <td><span class="badge ${r.risk}">${RISK_LABEL[r.risk]}</span></td>
       <td><div class="spark">${spark}</div></td>
       <td class="order-qty numeric highlight">${r.rawOrder > 0 ? r.rawOrder : '—'}</td>
