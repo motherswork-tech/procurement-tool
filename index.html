@@ -1478,7 +1478,7 @@ window.addEventListener('DOMContentLoaded', () => {
       if (data && data.uploaded_at) {
         const d = new Date(data.uploaded_at + 'T00:00:00');
         const label = d.toLocaleDateString('en-GB', { day:'2-digit', month:'short', year:'numeric' });
-        dateEl.textContent = `snapshot from ${label} · ${Number(data.row_count || 0).toLocaleString()} SKUs`;
+        dateEl.textContent = `snapshot from ${label} · ${Number(data.row_count || 0).toLocaleString()} SKUs · ${Number(data.total_rows || data.row_count || 0).toLocaleString()} rows`;
         banner.style.display = 'block';
       }
     })
