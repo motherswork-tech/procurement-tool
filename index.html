@@ -1110,22 +1110,23 @@ document.getElementById('btn-generate').addEventListener('click', async () => {
     // 2. sohFromApi[barcode] — direct lookup from /sales for barcodes that may not have weekly sales
     // 3. SOH CSV uploaded this session
     // 4. Default 0
+    // Always floor at 0 — negative SOH (Odoo data issue) should never inflate order quantities
     let soh = 0;
     if (apiData.soh !== null && apiData.soh !== undefined) {
-      soh = apiData.soh;
+      soh = Math.max(0, apiData.soh);
     } else if (sohFromApi[barcode] !== null && sohFromApi[barcode] !== undefined) {
-      soh = sohFromApi[barcode];
+      soh = Math.max(0, sohFromApi[barcode]);
     } else if (sohUploadedRows.length > 0) {
       const sohBcCol = document.getElementById('soh-map-barcode').value;
       const sohQtyCol = document.getElementById('soh-map-qty').value;
       const sohMatch = sohUploadedRows.find(r => normaliseBarcode(r[sohBcCol]) === barcode);
       if (sohMatch && sohQtyCol) {
-        soh = parseFloat(String(sohMatch[sohQtyCol]).replace(/[^0-9.\-]/g,'')) || 0;
+        soh = Math.max(0, parseFloat(String(sohMatch[sohQtyCol]).replace(/[^0-9.\-]/g,'')) || 0);
       }
     }
 
-    const mtc = adj_avg > 0 ? soh / adj_avg : (soh > 0 ? 99 : 0);
-    const rawOrder = Math.max(0, Math.round((targetMTC + leadTime) * adj_avg - soh));
+    const mtc = adj_avg > 0 ? Math.max(0, soh) / adj_avg : (soh > 0 ? 99 : 0);
+    const rawOrder = Math.max(0, Math.round((targetMTC + leadTime) * adj_avg - Math.max(0, soh)));
     const orderValue = rawOrder * cost;
 
     let risk = 'no-sales';
@@ -1349,7 +1350,7 @@ function renderTable() {
       <td class="cost numeric">${r.priceCurrency ? r.priceCurrency+' ' : ''}${r.costRaw.toFixed(2)}${r.fxRate ? `<div style="font-size:9px;color:var(--muted);">SGD ${r.cost.toFixed(2)}</div>` : ''}</td>
       ${weeks.map((v,i) => `<td class="numeric${r.excluded[i] ? ' excluded-month' : ''}" title="${r.excluded[i] ? (r.exclusion_reasons?.[i] || 'Partial week — excluded from avg') : (WEEKS[i]||'')}">${r.noSalesMatch ? '<span style="color:var(--muted)">—</span>' : (v||0)}${r.excluded[i]?'*':''}</td>`).join('')}
       <td class="numeric highlight">${r.noSalesMatch ? '<span style="color:var(--muted)">—</span>' : r.adj_avg.toFixed(1)}</td>
-      <td class="numeric highlight">${r.soh ?? '—'}</td>
+      <td class="numeric highlight">${Math.max(0, r.soh ?? 0)}</td>
       <td class="numeric">${r.adj_avg > 0 ? r.mtc.toFixed(1)+'w' : '—'}</td>
       ${oosCell}
       <td><span class="badge ${r.risk}">${RISK_LABEL[r.risk]}</span></td>
