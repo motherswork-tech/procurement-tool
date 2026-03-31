@@ -457,18 +457,22 @@
 
     <!-- STEP 02: ODOO INVENTORY (middle) -->
     <div class="card">
-      <div class="step-num">STEP 02</div>
+      <div class="step-num">STEP 02 <span style="font-family:var(--sans);font-size:9px;background:rgba(16,185,129,0.12);color:var(--success);border:1px solid rgba(16,185,129,0.25);border-radius:10px;padding:2px 8px;letter-spacing:0.04em;margin-left:6px;">OPTIONAL</span></div>
       <h2>Upload Odoo Inventory (SOH)</h2>
       <div class="upload-zone" id="drop-zone-soh">
         <input type="file" id="soh-file" accept=".csv">
         <span class="upload-icon">⬆</span>
         <div class="upload-title">Drop Odoo inventory CSV</div>
         <div class="upload-hint">Barcode · Product/Brand · Product · Warehouse · Available Quantity · Product/Sales Price</div>
-        <div class="upload-status" id="soh-upload-status">No file loaded</div>
+        <div class="upload-status" id="soh-upload-status">No file — will use last uploaded SOH</div>
+      </div>
+      <div id="soh-last-upload-banner" style="display:none; margin-top:10px; padding:8px 12px; background:rgba(16,185,129,0.07); border:1px solid rgba(16,185,129,0.2); border-radius:8px; font-family:var(--mono); font-size:10px; color:var(--success);">
+        ✓ Using last uploaded SOH snapshot — <span id="soh-last-upload-date" style="color:var(--text2);">checking...</span>
       </div>
       <div class="mtc-hint" style="margin-top:12px;">
-        Export as CSV from Odoo → Inventory → Reporting → Locations → Template: "Dashboard - Procurement"<br><br>
-        SOH is summed across all warehouses per barcode.
+        <strong>Recommended:</strong> Export the <em>full company inventory</em> once daily and upload here. SOH is summed across all warehouses per barcode.<br><br>
+        <strong>Optional each session</strong> — if you skip this step, the tool automatically uses the most recent snapshot already in BigQuery. Only re-upload when you want fresher stock numbers.<br><br>
+        Export path: Odoo → Inventory → Reporting → Locations → Template: <strong>"Dashboard - Procurement"</strong>
       </div>
       <div id="soh-col-map" style="display:none; margin-top:16px;">
         <div class="col-map-title">Map your columns →</div>
@@ -742,17 +746,63 @@ async function queryBigQuery(barcodes, sohRows) {
     }
   } catch(e) { console.warn('SOH fetch failed:', e); }
 
+  const MARCH_1_2026 = '2026-03-01';
+
   json.data.forEach(item => {
+    const soh = sohFromApi[item.barcode] ?? null;
     const weekly = item.weeks.map(w => w.qty);
+
+    // Base exclusion: partial (current) week
     const excluded = item.weeks.map(w => !w.is_complete);
+
+    // Cutoff exclusion: exclude any week before March 1 2026 (pre-Odoo data)
+    item.weeks.forEach((w, i) => {
+      if (w.week_start < MARCH_1_2026) excluded[i] = true;
+    });
+
+    // OOS exclusion: if SOH=0, exclude the last week that had sales
+    // (stock was depleting that week — understates real demand)
+    let lastSaleWeekIdx = null;
+    for (let i = item.weeks.length - 1; i >= 0; i--) {
+      if (item.weeks[i].qty > 0 && item.weeks[i].is_complete && !excluded[i]) {
+        lastSaleWeekIdx = i;
+        break;
+      }
+    }
+    if (soh === 0 && lastSaleWeekIdx !== null) {
+      excluded[lastSaleWeekIdx] = true;
+    }
+
+    // Recalculate adj_avg from non-excluded weeks only (ignore backend value)
+    const nonExcludedQtys = weekly.filter((_, i) => !excluded[i]);
+    const adj_avg = nonExcludedQtys.length > 0
+      ? Math.round((nonExcludedQtys.reduce((a, b) => a + b, 0) / nonExcludedQtys.length) * 100) / 100
+      : 0;
+
+    const exclusion_reasons = item.weeks.map((w, i) => {
+      if (w.week_start < MARCH_1_2026) return 'Before Odoo go-live (1 Mar 2026) — excluded';
+      if (!w.is_complete) return 'Partial week — excluded from avg';
+      if (excluded[i]) return 'OOS week — excluded from avg (SOH=0)';
+      return null;
+    });
+
+    // Derive last_sale_date from weekly data — last week with qty > 0
+    let lastSaleDate = lastSaleDateFromApi[item.barcode] ?? null;
+    for (let i = item.weeks.length - 1; i >= 0; i--) {
+      if (item.weeks[i].qty > 0) {
+        lastSaleDate = item.weeks[i].week_start;
+        break;
+      }
+    }
+
     result[item.barcode] = {
       weekly,
       excluded,
-      exclusion_reasons: item.weeks.map(w => w.is_complete ? null : 'Partial week — excluded from avg'),
-      soh: sohFromApi[item.barcode] ?? null,
-      adj_avg: item.adj_avg_weekly,
+      exclusion_reasons,
+      soh,
+      adj_avg,
       active_months: item.weeks.filter(w => w.qty > 0 && w.is_complete).length,
-      last_sale_date: lastSaleDateFromApi[item.barcode] ?? null,
+      last_sale_date: lastSaleDate,
     };
   });
   return { salesData: result, sohFromApi };
@@ -792,7 +842,7 @@ function parseSOHCSV(file) {
       sohUploadedRows = res.data;
       const cols = res.meta.fields || [];
       populateSOHColumnMap(cols);
-      sohUploadStatus.textContent = `✓ ${sohUploadedRows.length} rows loaded`;
+      sohUploadStatus.textContent = `✓ ${sohUploadedRows.length} rows loaded — will replace last snapshot on Generate`;
       sohUploadStatus.className = 'upload-status loaded';
       sohColMap.style.display = 'block';
     }
@@ -1132,12 +1182,16 @@ function renderResults(budget) {
 }
 
 function renderKPIs(budget) {
-  const total = resultsData.reduce((s,r) => s + r.orderValue, 0);
-  const units = resultsData.reduce((s,r) => s + r.rawOrder, 0);
+  const orderedRows = resultsData.filter(r => r.rawOrder > 0);
+  const total    = orderedRows.reduce((s,r) => s + r.orderValue, 0);
+  const units    = orderedRows.reduce((s,r) => s + r.rawOrder, 0);
   const stockouts = resultsData.filter(r => r.risk === 'stockout').length;
-  const lowStock = resultsData.filter(r => r.risk === 'low').length;
-  const hasOrder = resultsData.filter(r => r.rawOrder > 0).length;
-  const avgMTC = resultsData.filter(r => r.avg > 0).reduce((s,r,_,a) => s + r.mtc/a.length, 0);
+  const lowStock  = resultsData.filter(r => r.risk === 'low').length;
+  const hasOrder  = orderedRows.length;
+  const activeSkus = resultsData.filter(r => r.adj_avg > 0);
+  const avgWTC = activeSkus.length > 0
+    ? activeSkus.reduce((s,r) => s + Math.max(0, r.mtc), 0) / activeSkus.length
+    : 0;
   const pct = budget !== Infinity ? (total/budget*100).toFixed(0) : null;
 
   document.getElementById('kpi-strip').innerHTML = `
@@ -1159,11 +1213,11 @@ function renderKPIs(budget) {
     <div class="kpi">
       <div class="kpi-label">Low Stock</div>
       <div class="kpi-value warn">${lowStock}</div>
-      <div class="kpi-sub">&lt; 2 months cover</div>
+      <div class="kpi-sub">&lt; 2 weeks cover</div>
     </div>
     <div class="kpi">
-      <div class="kpi-label">Avg Current MTC</div>
-      <div class="kpi-value">${avgMTC.toFixed(1)}m</div>
+      <div class="kpi-label">Avg Current WTC</div>
+      <div class="kpi-value">${avgWTC.toFixed(1)}w</div>
       <div class="kpi-sub">across active SKUs</div>
     </div>
     <div class="kpi">
@@ -1413,6 +1467,21 @@ window.addEventListener('DOMContentLoaded', () => {
   if (DEMO_MODE) {
     badge.innerHTML = '<div class="bq-dot" style="background:#f59e0b;box-shadow:0 0 8px #f59e0b"></div> Demo mode · set API_URL for live data';
   }
+
+  // Check for existing SOH snapshot in BigQuery and show banner
+  fetch(`${PROCUREMENT_API}/soh/latest`, { method: 'GET', credentials: 'omit' })
+    .then(r => r.ok ? r.json() : null)
+    .then(data => {
+      const banner = document.getElementById('soh-last-upload-banner');
+      const dateEl = document.getElementById('soh-last-upload-date');
+      if (data && data.uploaded_at) {
+        const d = new Date(data.uploaded_at + 'T00:00:00');
+        const label = d.toLocaleDateString('en-GB', { day:'2-digit', month:'short', year:'numeric' });
+        dateEl.textContent = `snapshot from ${label} · ${Number(data.row_count || 0).toLocaleString()} SKUs`;
+        banner.style.display = 'block';
+      }
+    })
+    .catch(() => {});
 });
 
 // ==================== DEMO AUTO-LOAD ====================
