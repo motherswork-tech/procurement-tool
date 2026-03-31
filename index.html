@@ -742,68 +742,20 @@ async function queryBigQuery(barcodes, sohRows) {
     }
   } catch(e) { console.warn('SOH fetch failed:', e); }
 
-  const MARCH_1_2026 = '2026-03-01';
-
   json.data.forEach(item => {
-    const soh = sohFromApi[item.barcode] ?? null;
     const weekly = item.weeks.map(w => w.qty);
-
-    // Base exclusion: partial (current) week
     const excluded = item.weeks.map(w => !w.is_complete);
-
-    // Cutoff exclusion: exclude any week that starts before March 1 2026
-    item.weeks.forEach((w, i) => {
-      if (w.week_start < MARCH_1_2026) excluded[i] = true;
-    });
-
-    // OOS exclusion: if SOH=0, also exclude the last week that had sales
-    // (stock was depleting that week — not representative of real demand)
-    let lastSaleWeekIdx = null;
-    for (let i = item.weeks.length - 1; i >= 0; i--) {
-      if (item.weeks[i].qty > 0 && item.weeks[i].is_complete && !excluded[i]) {
-        lastSaleWeekIdx = i;
-        break;
-      }
-    }
-    if (soh === 0 && lastSaleWeekIdx !== null) {
-      excluded[lastSaleWeekIdx] = true;
-    }
-
-    // Recalculate adj_avg purely from non-excluded weeks
-    const nonExcludedQtys = weekly.filter((_, i) => !excluded[i]);
-    const adj_avg = nonExcludedQtys.length > 0
-      ? Math.round((nonExcludedQtys.reduce((a, b) => a + b, 0) / nonExcludedQtys.length) * 100) / 100
-      : 0;
-
-    const exclusion_reasons = item.weeks.map((w, i) => {
-      if (w.week_start < MARCH_1_2026) return 'Before Odoo go-live (1 Mar 2026) — excluded';
-      if (!w.is_complete) return 'Partial week — excluded from avg';
-      if (excluded[i]) return 'OOS week — excluded from avg (SOH=0)';
-      return null;
-    });
-
-    // Derive last_sale_date from weekly data — last week with qty > 0
-    // More reliable than monthly API which may not cover all weeks
-    let lastSaleDate = lastSaleDateFromApi[item.barcode] ?? null;
-    for (let i = item.weeks.length - 1; i >= 0; i--) {
-      if (item.weeks[i].qty > 0) {
-        // Use the week_start date as the proxy (actual last sale was sometime that week)
-        lastSaleDate = item.weeks[i].week_start;
-        break;
-      }
-    }
-
     result[item.barcode] = {
       weekly,
       excluded,
-      exclusion_reasons,
-      soh,
-      adj_avg,
+      exclusion_reasons: item.weeks.map(w => w.is_complete ? null : 'Partial week — excluded from avg'),
+      soh: sohFromApi[item.barcode] ?? null,
+      adj_avg: item.adj_avg_weekly,
       active_months: item.weeks.filter(w => w.qty > 0 && w.is_complete).length,
-      last_sale_date: lastSaleDate,
+      last_sale_date: lastSaleDateFromApi[item.barcode] ?? null,
     };
   });
-  return result;
+  return { salesData: result, sohFromApi };
 }
 
 // ==================== BARCODE NORMALISER ====================
@@ -1060,9 +1012,9 @@ document.getElementById('btn-generate').addEventListener('click', async () => {
     }
   }, 400);
 
-  let salesData;
+  let salesData, sohFromApi;
   try {
-    salesData = await queryBigQuery(barcodes, sohRows);
+    ({ salesData, sohFromApi } = await queryBigQuery(barcodes, sohRows));
   } catch(e) {
     clearInterval(stepInterval);
     progressLabel.textContent = `Error: ${e.message}`;
@@ -1103,12 +1055,17 @@ document.getElementById('btn-generate').addEventListener('click', async () => {
     const adj_avg = apiData.adj_avg ?? avg;
     const active_months = apiData.active_months ?? 0;
 
-    // SOH: use uploaded SOH CSV match if API didn't return one
+    // SOH resolution priority:
+    // 1. apiData.soh — from /sales endpoint (BQ latest snapshot), set when barcode matched weekly data
+    // 2. sohFromApi[barcode] — direct lookup from /sales for barcodes that may not have weekly sales
+    // 3. SOH CSV uploaded this session
+    // 4. Default 0
     let soh = 0;
     if (apiData.soh !== null && apiData.soh !== undefined) {
       soh = apiData.soh;
+    } else if (sohFromApi[barcode] !== null && sohFromApi[barcode] !== undefined) {
+      soh = sohFromApi[barcode];
     } else if (sohUploadedRows.length > 0) {
-      // Try matching from SOH CSV directly
       const sohBcCol = document.getElementById('soh-map-barcode').value;
       const sohQtyCol = document.getElementById('soh-map-qty').value;
       const sohMatch = sohUploadedRows.find(r => normaliseBarcode(r[sohBcCol]) === barcode);
