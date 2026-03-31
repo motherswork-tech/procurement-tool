@@ -122,10 +122,11 @@
   /* ── STEP LAYOUT ── */
   .steps {
     display: grid;
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: 1fr 1fr 1fr;
     gap: 16px;
     margin-bottom: 16px;
   }
+  @media (max-width: 1024px) { .steps { grid-template-columns: 1fr 1fr; } }
   @media (max-width: 768px) { .steps { grid-template-columns: 1fr; } }
 
   .card {
@@ -453,9 +454,53 @@
       </div>
     </div>
 
-    <!-- STEP 2: PARAMS -->
+    <!-- STEP 02: ODOO INVENTORY (middle) -->
     <div class="card">
       <div class="step-num">STEP 02</div>
+      <h2>Upload Odoo Inventory (SOH)</h2>
+      <div class="upload-zone" id="drop-zone-soh">
+        <input type="file" id="soh-file" accept=".csv">
+        <span class="upload-icon">⬆</span>
+        <div class="upload-title">Drop Odoo inventory CSV</div>
+        <div class="upload-hint">Barcode · Product/Brand · Product · Warehouse · Available Quantity · Product/Sales Price</div>
+        <div class="upload-status" id="soh-upload-status">No file loaded</div>
+      </div>
+      <div class="mtc-hint" style="margin-top:12px;">
+        Export as CSV from Odoo → Inventory → Reporting → Locations → Template: "Dashboard - Procurement"<br><br>
+        SOH is summed across all warehouses per barcode.
+      </div>
+      <div id="soh-col-map" style="display:none; margin-top:16px;">
+        <div class="col-map-title">Map your columns →</div>
+        <div class="col-map-row">
+          <span class="col-map-label">Barcode</span>
+          <select id="soh-map-barcode"></select>
+        </div>
+        <div class="col-map-row">
+          <span class="col-map-label">Brand</span>
+          <select id="soh-map-brand"></select>
+        </div>
+        <div class="col-map-row">
+          <span class="col-map-label">Product</span>
+          <select id="soh-map-product"></select>
+        </div>
+        <div class="col-map-row">
+          <span class="col-map-label">Warehouse</span>
+          <select id="soh-map-warehouse"></select>
+        </div>
+        <div class="col-map-row">
+          <span class="col-map-label">Avail. Qty</span>
+          <select id="soh-map-qty"></select>
+        </div>
+        <div class="col-map-row">
+          <span class="col-map-label">RRP</span>
+          <select id="soh-map-price"></select>
+        </div>
+      </div>
+    </div>
+
+    <!-- STEP 03: PARAMS (right) -->
+    <div class="card">
+      <div class="step-num">STEP 03</div>
       <h2>Order Parameters</h2>
 
       <div class="params-grid">
@@ -485,9 +530,9 @@
           <span class="param-note">Currency of unit costs above</span>
         </div>
         <div class="param-group">
-          <label>FX Rate → SGD</label>
+          <label>FX Rate → Local Currency</label>
           <input type="number" id="fx-rate" placeholder="e.g. 1.46" min="0" step="0.0001">
-          <span class="param-note">1 [price currency] = ? SGD · leave blank = no conversion</span>
+          <span class="param-note">1 [price currency] = ? local currency · leave blank = no conversion</span>
         </div>
       </div>
 
@@ -507,55 +552,6 @@
     </div>
 
   </div><!-- end steps -->
-
-  <!-- STEP 1b: ODOO INVENTORY -->
-  <div class="card" style="margin-bottom:20px;">
-    <div class="step-num">STEP 01b</div>
-    <h2>Upload Odoo Inventory (SOH)</h2>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;align-items:start;">
-      <div>
-        <div class="upload-zone" id="drop-zone-soh">
-          <input type="file" id="soh-file" accept=".csv">
-          <span class="upload-icon">⬆</span>
-          <div class="upload-title">Drop Odoo inventory CSV</div>
-          <div class="upload-hint">Barcode · Product/Brand · Product · Warehouse · Available Quantity · Product/Sales Price</div>
-          <div class="upload-status" id="soh-upload-status">No file loaded</div>
-        </div>
-        <div class="mtc-hint" style="margin-top:12px;">
-          Export from Odoo → Inventory → Products.<br>
-          Upload using <strong>V2 column name map</strong> in BigQuery.<br>
-          SOH is summed across all warehouses per barcode.
-        </div>
-      </div>
-      <div id="soh-col-map" style="display:none;">
-        <div class="col-map-title">Map your columns →</div>
-        <div class="col-map-row">
-          <span class="col-map-label">Barcode</span>
-          <select id="soh-map-barcode"></select>
-        </div>
-        <div class="col-map-row">
-          <span class="col-map-label">Brand</span>
-          <select id="soh-map-brand"></select>
-        </div>
-        <div class="col-map-row">
-          <span class="col-map-label">Product</span>
-          <select id="soh-map-product"></select>
-        </div>
-        <div class="col-map-row">
-          <span class="col-map-label">Warehouse</span>
-          <select id="soh-map-warehouse"></select>
-        </div>
-        <div class="col-map-row">
-          <span class="col-map-label">Avail. Qty</span>
-          <select id="soh-map-qty"></select>
-        </div>
-        <div class="col-map-row">
-          <span class="col-map-label">RRP</span>
-          <select id="soh-map-price"></select>
-        </div>
-      </div>
-    </div>
-  </div>
 
   <!-- RESULTS -->
   <div id="results-section">
