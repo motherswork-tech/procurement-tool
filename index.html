@@ -750,14 +750,38 @@ async function queryBigQuery(barcodes, sohRows) {
   } catch(e) { console.warn('SOH fetch failed:', e); }
 
   json.data.forEach(item => {
+    const soh = sohFromApi[item.barcode] ?? null;
     const weekly = item.weeks.map(w => w.qty);
+    // Base exclusion: partial (current) week
     const excluded = item.weeks.map(w => !w.is_complete);
+
+    // OOS exclusion: if SOH=0, also exclude the last week that had sales
+    // (product was already running out that week — not representative of true demand)
+    if (soh === 0) {
+      const lastSaleIdx = item.last_sale_week_idx ?? null;
+      if (lastSaleIdx !== null && lastSaleIdx < excluded.length) {
+        excluded[lastSaleIdx] = true;
+      }
+    }
+
+    // Recalculate adj_avg from non-excluded weeks
+    const nonExcludedQtys = weekly.filter((_, i) => !excluded[i]);
+    const adj_avg = nonExcludedQtys.length > 0
+      ? Math.round((nonExcludedQtys.reduce((a,b) => a+b, 0) / nonExcludedQtys.length) * 100) / 100
+      : 0;
+
+    const exclusion_reasons = item.weeks.map((w, i) => {
+      if (!w.is_complete) return 'Partial week — excluded from avg';
+      if (excluded[i]) return 'OOS week — excluded from avg (SOH=0)';
+      return null;
+    });
+
     result[item.barcode] = {
       weekly,
       excluded,
-      exclusion_reasons: item.weeks.map(w => w.is_complete ? null : 'Partial week — excluded from avg'),
-      soh: sohFromApi[item.barcode] ?? null,
-      adj_avg: item.adj_avg_weekly,
+      exclusion_reasons,
+      soh,
+      adj_avg,
       active_months: item.weeks.filter(w => w.qty > 0 && w.is_complete).length,
       last_sale_date: lastSaleDateFromApi[item.barcode] ?? null,
     };
@@ -1134,12 +1158,16 @@ function renderResults(budget) {
 }
 
 function renderKPIs(budget) {
-  const total = resultsData.reduce((s,r) => s + r.orderValue, 0);
-  const units = resultsData.reduce((s,r) => s + r.rawOrder, 0);
+  const orderedRows = resultsData.filter(r => r.rawOrder > 0);
+  const total    = orderedRows.reduce((s,r) => s + r.orderValue, 0);
+  const units    = orderedRows.reduce((s,r) => s + r.rawOrder, 0);
   const stockouts = resultsData.filter(r => r.risk === 'stockout').length;
-  const lowStock = resultsData.filter(r => r.risk === 'low').length;
-  const hasOrder = resultsData.filter(r => r.rawOrder > 0).length;
-  const avgMTC = resultsData.filter(r => r.avg > 0).reduce((s,r,_,a) => s + r.mtc/a.length, 0);
+  const lowStock  = resultsData.filter(r => r.risk === 'low').length;
+  const hasOrder  = orderedRows.length;
+  const activeSkus = resultsData.filter(r => r.adj_avg > 0);
+  const avgWTC = activeSkus.length > 0
+    ? activeSkus.reduce((s,r) => s + Math.max(0, r.mtc), 0) / activeSkus.length
+    : 0;
   const pct = budget !== Infinity ? (total/budget*100).toFixed(0) : null;
 
   document.getElementById('kpi-strip').innerHTML = `
@@ -1161,11 +1189,11 @@ function renderKPIs(budget) {
     <div class="kpi">
       <div class="kpi-label">Low Stock</div>
       <div class="kpi-value warn">${lowStock}</div>
-      <div class="kpi-sub">&lt; 2 months cover</div>
+      <div class="kpi-sub">&lt; 2 weeks cover</div>
     </div>
     <div class="kpi">
-      <div class="kpi-label">Avg Current MTC</div>
-      <div class="kpi-value">${avgMTC.toFixed(1)}m</div>
+      <div class="kpi-label">Avg Current WTC</div>
+      <div class="kpi-value">${avgWTC.toFixed(1)}w</div>
       <div class="kpi-sub">across active SKUs</div>
     </div>
     <div class="kpi">
