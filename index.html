@@ -457,19 +457,26 @@
 
     <!-- STEP 02: ODOO INVENTORY (middle) -->
     <div class="card">
-      <div class="step-num">STEP 02</div>
+      <div class="step-num">STEP 02 <span style="font-family:var(--sans);font-size:9px;background:rgba(16,185,129,0.12);color:var(--success);border:1px solid rgba(16,185,129,0.25);border-radius:10px;padding:2px 8px;letter-spacing:0.04em;margin-left:6px;">OPTIONAL</span></div>
       <h2>Upload Odoo Inventory (SOH)</h2>
       <div class="upload-zone" id="drop-zone-soh">
         <input type="file" id="soh-file" accept=".csv">
         <span class="upload-icon">⬆</span>
         <div class="upload-title">Drop Odoo inventory CSV</div>
         <div class="upload-hint">Barcode · Product/Brand · Product · Warehouse · Available Quantity · Product/Sales Price</div>
-        <div class="upload-status" id="soh-upload-status">No file loaded</div>
+        <div class="upload-status" id="soh-upload-status">No file — will use last uploaded SOH</div>
       </div>
+
+      <div id="soh-last-upload-banner" style="display:none; margin-top:10px; padding:8px 12px; background:rgba(16,185,129,0.07); border:1px solid rgba(16,185,129,0.2); border-radius:8px; font-family:var(--mono); font-size:10px; color:var(--success);">
+        ✓ Using last uploaded SOH snapshot — <span id="soh-last-upload-date" style="color:var(--text2);">checking...</span>
+      </div>
+
       <div class="mtc-hint" style="margin-top:12px;">
-        Export as CSV from Odoo → Inventory → Reporting → Locations → Template: "Dashboard - Procurement"<br><br>
-        SOH is summed across all warehouses per barcode.
+        <strong>Recommended:</strong> Export the <em>full company inventory</em> once daily and upload here. SOH is summed across all warehouses per barcode.<br><br>
+        <strong>Optional each session</strong> — if you skip this step, the tool automatically uses the most recent snapshot already in BigQuery. Only re-upload when you want fresher stock numbers.<br><br>
+        Export path: Odoo → Inventory → Reporting → Locations → Template: <strong>"Dashboard - Procurement"</strong>
       </div>
+
       <div id="soh-col-map" style="display:none; margin-top:16px;">
         <div class="col-map-title">Map your columns →</div>
         <div class="col-map-row">
@@ -792,7 +799,7 @@ function parseSOHCSV(file) {
       sohUploadedRows = res.data;
       const cols = res.meta.fields || [];
       populateSOHColumnMap(cols);
-      sohUploadStatus.textContent = `✓ ${sohUploadedRows.length} rows loaded`;
+      sohUploadStatus.textContent = `✓ ${sohUploadedRows.length} rows loaded — will replace last snapshot on Generate`;
       sohUploadStatus.className = 'upload-status loaded';
       sohColMap.style.display = 'block';
     }
@@ -1408,6 +1415,21 @@ window.addEventListener('DOMContentLoaded', () => {
   if (DEMO_MODE) {
     badge.innerHTML = '<div class="bq-dot" style="background:#f59e0b;box-shadow:0 0 8px #f59e0b"></div> Demo mode · set API_URL for live data';
   }
+
+  // Check if there's an existing SOH snapshot in BigQuery and show banner
+  fetch(`${PROCUREMENT_API}/soh/latest`, { method: 'GET', credentials: 'omit' })
+    .then(r => r.ok ? r.json() : null)
+    .then(data => {
+      const banner = document.getElementById('soh-last-upload-banner');
+      const dateEl = document.getElementById('soh-last-upload-date');
+      if (data && data.uploaded_at) {
+        const d = new Date(data.uploaded_at + 'T00:00:00');
+        const label = d.toLocaleDateString('en-GB', { day:'2-digit', month:'short', year:'numeric' });
+        dateEl.textContent = `snapshot from ${label} · ${Number(data.row_count || 0).toLocaleString()} SKUs`;
+        banner.style.display = 'block';
+      }
+    })
+    .catch(() => {});
 });
 
 // ==================== DEMO AUTO-LOAD ====================
